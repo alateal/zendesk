@@ -195,15 +195,14 @@ const Dashboard = () => {
     if (!message.trim() || !selectedApp) return;
 
     try {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('messages')
         .insert([{
           content: message,
-          sender_id: 'user',
-          conversations_id: selectedApp,  // Add the conversation ID
+          sender_id: 'agent',
+          conversations_id: selectedApp,
           organizations_id: selectedOrg,
-          sender_name: 'User',
-          sender_type: 'user' as const,
+          sender_type: 'user'
         }]);
 
       if (error) throw error;
@@ -635,47 +634,55 @@ const Dashboard = () => {
 
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto">
-          {conversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              onClick={() => setSelectedApp(conversation.id)}
-              className={`w-full p-4 flex flex-col border-b border-[#8B4513] ${
-                selectedApp === conversation.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-medium text-[#3C1810]">
-                  {conversation.customer_name}
-                </span>
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs px-2 py-1 rounded bg-[#8B4513] text-[#FDF6E3]">
-                    {conversation.channels}
+          {conversations.map((conversation) => {
+            // Find the latest customer message
+            const customerMessages = conversation.messages?.filter(msg => msg.sender_type === 'customer') || [];
+            const latestCustomerMessage = customerMessages.length > 0 
+              ? customerMessages[customerMessages.length - 1] 
+              : null;
+
+            return (
+              <button
+                key={conversation.id}
+                onClick={() => setSelectedApp(conversation.id)}
+                className={`w-full p-4 flex flex-col border-b border-[#8B4513] ${
+                  selectedApp === conversation.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium text-[#3C1810]">
+                    {conversation.customer_name}
                   </span>
-                  <span className="text-sm text-[#5C2E0E]">
-                    {new Date(conversation.latest_message?.created_at || conversation.created_at).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs px-2 py-1 rounded bg-[#8B4513] text-[#FDF6E3]">
+                      {conversation.channels}
+                    </span>
+                    <span className="text-sm text-[#5C2E0E]">
+                      {new Date(latestCustomerMessage?.created_at || conversation.created_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                  </div>
+                </div>
+                {latestCustomerMessage && (
+                  <p className="text-sm text-[#5C2E0E] truncate">
+                    {latestCustomerMessage.content}
+                  </p>
+                )}
+                <div className="mt-1">
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    conversation.status === 'New' ? 'bg-orange-100 text-orange-800' :
+                    conversation.status === 'Active' ? 'bg-green-100 text-green-800' :
+                    conversation.status === 'Closed' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {conversation.status}
                   </span>
                 </div>
-              </div>
-              {conversation.latest_message && (
-                <p className="text-sm text-[#5C2E0E] truncate">
-                  {conversation.latest_message.content}
-                </p>
-              )}
-              <div className="mt-1">
-                <span className={`text-xs px-2 py-1 rounded ${
-                  conversation.status === 'new' ? 'bg-orange-100 text-orange-800' :
-                  conversation.status === 'active' ? 'bg-green-100 text-green-800' :
-                  conversation.status === 'closed' ? 'bg-yellow-100 text-yellow-800' :
-                  'bg-gray-100 text-gray-800'
-                }`}>
-                  {conversation.status}
-                </span>
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       </div>
 

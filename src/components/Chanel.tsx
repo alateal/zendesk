@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { IconMessage, IconX, IconSend, IconUser, IconMail } from '@tabler/icons-react';
+import supabase from '../supabase';
 
 type UserInfo = {
   fullName: string;
@@ -14,11 +15,160 @@ const Chanel = () => {
     fullName: '',
     email: ''
   });
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Array<{
+    id: string;
+    content: string;
+    created_at: string;
+    sender_type: string;
+  }>>([]);
 
-  const handleSubmitUserInfo = (e: React.FormEvent) => {
+  const handleSubmitUserInfo = async (e: React.FormEvent) => {
     e.preventDefault();
-    setUserInfo(formData);
+    
+    try {
+      // First check if customer exists
+      const { data: existingCustomer, error: searchError } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('email', formData.email)
+        .single();
+
+      if (searchError && searchError.code !== 'PGRST116') { // PGRST116 is "not found" error
+        throw searchError;
+      }
+
+      let customerData;
+      
+      if (existingCustomer) {
+        // Use existing customer data
+        customerData = existingCustomer;
+      } else {
+        // Create new customer
+        const { data: newCustomer, error: insertError } = await supabase
+          .from('customers')
+          .insert([{
+            full_name: formData.fullName,
+            email: formData.email,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e'
+          }])
+          .select()
+          .single();
+
+        if (insertError) throw insertError;
+        customerData = newCustomer;
+      }
+
+      // Set user info for chat
+      setUserInfo({
+        fullName: customerData.full_name,
+        email: customerData.email
+      });
+
+    } catch (error) {
+      console.error('Error handling customer info:', error);
+      alert('Error saving your information. Please try again.');
+    }
   };
+
+  const handleSendMessage = async () => {
+    if (!message.trim() || !userInfo) return;
+
+    try {
+      // First, get customer_id using email
+      const { data: customer, error: customerError } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('email', userInfo.email)
+        .single();
+
+      if (customerError) throw customerError;
+
+      let currentConversationId = conversationId;
+
+      // If no conversation exists, create one
+      if (!currentConversationId) {
+        const { data: newConversation, error: conversationError } = await supabase
+          .from('conversations')
+          .insert([{
+            customer_id: customer.id,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            channels: 'Website',
+            status: 'New'
+          }])
+          .select()
+          .single();
+
+        if (conversationError) throw conversationError;
+        currentConversationId = newConversation.id;
+        setConversationId(newConversation.id);
+      }
+
+      // Send the message
+      const { error: messageError } = await supabase
+        .from('messages')
+        .insert([{
+          content: message,
+          conversations_id: currentConversationId,
+          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+          sender_id: customer.id,
+          sender_type: 'customer'
+        }]);
+
+      if (messageError) throw messageError;
+      
+      // Clear the input after successful send
+      setMessage('');
+
+    } catch (error) {
+      console.error('Error sending message:', error);
+      alert('Error sending message. Please try again.');
+    }
+  };
+
+  useEffect(() => {
+    if (!conversationId) return;
+
+    // Load existing messages
+    const loadMessages = async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversations_id', conversationId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error loading messages:', error);
+        return;
+      }
+
+      if (data) setMessages(data);
+    };
+
+    loadMessages();
+
+    // Subscribe to new messages
+    const channel = supabase
+      .channel(`messages-${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `conversations_id=eq.${conversationId}`
+        },
+        (payload) => {
+          setMessages(current => [...current, payload.new]);
+        }
+      )
+      .subscribe();
+
+    // Cleanup subscription
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [conversationId]);
 
   return (
     <div 
@@ -124,6 +274,31 @@ const Chanel = () => {
                       Welcome {userInfo.fullName}! How can we assist you today?
                     </p>
                   </div>
+                  
+                  {/* Chat messages */}
+                  {messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`mb-2 ${
+                        msg.sender_type === 'customer' ? 'ml-auto' : 'mr-auto'
+                      } max-w-[80%]`}
+                    >
+                      <div
+                        className={`rounded-lg p-3 ${
+                          msg.sender_type === 'customer'
+                            ? 'bg-black text-[#FFFFF0] ml-auto'
+                            : 'bg-white border border-black'
+                        }`}
+                      >
+                        <p>{msg.content}</p>
+                      </div>
+                      <div className={`text-xs mt-1 text-gray-500 ${
+                        msg.sender_type === 'customer' ? 'text-right' : 'text-left'
+                      }`}>
+                        {new Date(msg.created_at).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
                 {/* Input Area */}
@@ -137,6 +312,7 @@ const Chanel = () => {
                       className="flex-1 px-3 py-2 rounded border border-black focus:outline-none focus:ring-2 focus:ring-black bg-[#FFFFF0]"
                     />
                     <button
+                      onClick={handleSendMessage}
                       className="bg-black text-[#FFFFF0] p-2 rounded hover:bg-neutral-800 transition-colors"
                     >
                       <IconSend size={20} />
