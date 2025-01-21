@@ -17,6 +17,7 @@
 - **name**: `text`
 - **logoUrl**: `text`
 
+
 ---
 
 ## `role`
@@ -27,5 +28,23 @@
 ---
 
 ## `conversations`
-- **id**: `int8` (Primary Key)
+- **id**: `uuid` (Primary Key)
 - **created_at**: `timestamptz`
+- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
+- **channels**: `text`
+- **status**: `text`
+
+
+---
+
+## `messages`
+- **id**: `uuid` (Primary Key)
+- **created_at**: `timestamptz`
+- **conversations_id**: `uuid` (Foreign Key to `conversations.id`)
+- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
+- **sender_id**: `text`
+- **sender_name**: `text`
+- **sender_type**: `text`
+- **content**: `text`
+
+

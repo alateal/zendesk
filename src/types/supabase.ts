@@ -1,20 +1,20 @@
 export interface Message {
-  id: number;
-  content: string;
-  user_id: string;
-  conversation_id: string;
+  id: string;  // uuid
   created_at: string;
-  sender_name: string | null;
-  sender_type: 'user' | 'customer' | 'ai';
+  conversations_id: string;  // uuid
+  organizations_id: string;  // uuid
+  sender_id: string;  // text
+  sender_name: string;  // text
+  sender_type: string;  // text
+  content: string;  // text
 }
 
 export interface UserProfile {
   id: string;
-  full_name: string | null;
-  role: 'admin' | 'agent' | 'customer';
-  organization_id: string | null;
-  avatar_url: string | null;
-  metadata: Record<string, any>;
+  display_name: string | null;
+  role_id: string;
+  organizations_id: string;
   created_at: string;
-  updated_at: string;
+  email: string;
+  auth_users_id: string;
 } 

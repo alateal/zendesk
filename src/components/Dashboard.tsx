@@ -17,7 +17,38 @@ import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
 import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
-import { Message } from '../types/supabase';
+
+type Organization = {
+  id: string;
+  name: string;
+  logoUrl: string;
+  created_at: string;
+};
+
+type Conversation = {
+  id: string;
+  created_at: string;
+  organizations_id: string;
+  channels: string;
+  status: string;
+  latest_message?: {
+    sender_id: string;
+    sender_name: string;
+    sender_type: string;
+    content: string;
+    created_at: string;
+  };
+};
+
+type Message = {
+  id: string;
+  created_at: string;
+  organizations_id: string;
+  sender_id: string;
+  sender_name: string;
+  sender_type: string;
+  content: string;
+};
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -25,6 +56,10 @@ const Dashboard = () => {
   const [selectedApp, setSelectedApp] = useState('whatsapp');
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
 
   // Check authentication when component mounts
   useEffect(() => {
@@ -92,7 +127,7 @@ const Dashboard = () => {
       const { data, error } = await supabase
         .from('messages')
         .select('*')
-        .eq('conversation_id', conversationId)
+        .eq('organizations_id', selectedOrg)
         .order('created_at', { ascending: true });
 
       if (error) throw error;
@@ -104,25 +139,32 @@ const Dashboard = () => {
 
   // Set up real-time subscription when conversation changes
   useEffect(() => {
-    if (!selectedApp) return;
+    if (!selectedApp || !selectedOrg) {
+      console.log('No conversation or organization selected');
+      return;
+    }
 
     // Load initial messages
     loadMessages(selectedApp);
 
-    // Set up real-time subscription
+    // Set up real-time subscription without filter
     const channel = supabase
-      .channel(`messages:${selectedApp}`)
+      .channel(`messages-${selectedApp}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${selectedApp}`,
+          table: 'messages'
         },
         (payload) => {
-          const newMessage = payload.new as Message;
-          setMessages((current) => [...current, newMessage]);
+          // Check organization ID in the handler
+          if (payload.new && 
+              payload.new.organizations_id === selectedOrg && 
+              payload.new.conversations_id === selectedApp) {
+            const newMessage = payload.new as Message;
+            setMessages((current) => [...current, newMessage]);
+          }
         }
       )
       .subscribe();
@@ -131,7 +173,7 @@ const Dashboard = () => {
     return () => {
       channel.unsubscribe();
     };
-  }, [selectedApp]);
+  }, [selectedApp, selectedOrg]);
 
   // Function to send message
   const sendMessage = async () => {
@@ -142,8 +184,8 @@ const Dashboard = () => {
         .from('messages')
         .insert([{
           content: message,
-          user_id: 'user',
-          conversation_id: selectedApp,
+          sender_id: 'user',
+          organizations_id: selectedOrg,
           sender_name: 'User',
           sender_type: 'user' as const,
         }]);
@@ -174,14 +216,286 @@ const Dashboard = () => {
     }
   };
 
+  useEffect(() => {
+    const fetchOrganizations = async () => {
+      setIsLoading(true);
+      try {
+        const { data: orgs, error } = await supabase
+          .from('organizations')
+          .select('*')
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          console.error('Error fetching organizations:', error);
+          return;
+        }
+        
+        if (orgs && orgs.length > 0) {
+          console.log('Setting organizations:', orgs);
+          setOrganizations(orgs);
+          if (!selectedOrg) {
+            console.log('Setting selected org:', orgs[0].id);
+            setSelectedOrg(orgs[0].id);
+          }
+        }
+      } catch (error) {
+        console.error('Error:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchOrganizations();
+  }, []);
+
+  // Add this console log in the render to verify the state
+  console.log('Current organizations state:', organizations);
+
+  // Update the conversations fetch effect
+  useEffect(() => {
+    if (!selectedOrg) {
+      console.log('No organization selected, skipping subscription setup');
+      return;
+    }
+
+    const fetchConversations = async () => {
+      try {
+        console.log('Fetching conversations for org:', selectedOrg);
+        
+        // First try to get just conversations without joins
+        const { data: simpleData, error: simpleError } = await supabase
+          .from('conversations')
+          .select('*')
+        
+        console.log('Simple conversations query result:', { data: simpleData, error: simpleError });
+
+        // Then try the full query with joins
+        const { data: conversationsData, error: conversationsError } = await supabase
+          .from('conversations')
+          .select(`
+            id,
+            created_at,
+            organizations_id,
+            channels,
+            status,
+            messages (
+              id,
+              content,
+              sender_id,
+              sender_name,
+              sender_type,
+              created_at,
+              conversations_id
+            )
+          `)
+          .eq('organizations_id', selectedOrg)
+          .order('created_at', { ascending: false });
+
+        if (conversationsError) {
+          console.error('Error fetching conversations:', conversationsError);
+          return;
+        }
+        
+        console.log('Full conversations data:', conversationsData);
+
+        if (conversationsData && conversationsData.length > 0) {
+          const conversationsWithLatestMessage = conversationsData.map(conv => {
+            const messages = conv.messages || [];
+            console.log(`Messages for conversation ${conv.id}:`, messages);
+            
+            const latestMessage = messages.length > 0 
+              ? messages.sort((a, b) => 
+                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+                )[0]
+              : undefined;
+
+            return {
+              ...conv,
+              latest_message: latestMessage
+            };
+          });
+
+          console.log('Final processed conversations:', conversationsWithLatestMessage);
+          setConversations(conversationsWithLatestMessage);
+        } else {
+          console.log('No conversations found for organization:', selectedOrg);
+          
+          // Debug: Check if the organization exists
+          const { data: orgData } = await supabase
+            .from('organizations')
+            .select('*')
+            .eq('id', selectedOrg)
+            .single();
+            
+          console.log('Organization data:', orgData);
+        }
+      } catch (error) {
+        console.error('Error in fetchConversations:', error);
+      }
+    };
+
+    // Initial fetch
+    fetchConversations();
+
+    // Set up real-time subscription without filters
+    const channel = supabase.channel(`org-${selectedOrg}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'conversations'
+        },
+        (payload) => {
+          console.log('Conversation inserted:', payload);
+          // Check organization ID in the handler instead of filter
+          if (payload.new && payload.new.organizations_id === selectedOrg) {
+            fetchConversations();
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages'
+        },
+        (payload) => {
+          console.log('Message inserted:', payload);
+          // Check organization ID in the handler instead of filter
+          if (payload.new && payload.new.organizations_id === selectedOrg) {
+            fetchConversations();
+          }
+        }
+      );
+
+    // Subscribe and handle connection status
+    channel.subscribe(async (status) => {
+      console.log('Subscription status:', status);
+      if (status === 'SUBSCRIBED') {
+        console.log('Successfully subscribed to changes');
+      }
+      if (status === 'CHANNEL_ERROR') {
+        console.error('Channel error occurred');
+        // Try to reconnect
+        await channel.unsubscribe();
+        channel.subscribe();
+      }
+    });
+
+    // Cleanup
+    return () => {
+      console.log('Cleaning up subscription');
+      channel.unsubscribe();
+    };
+  }, [selectedOrg]);
+
+  // Add this function
+  const refreshSession = async () => {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) {
+      console.error('Error refreshing session:', error);
+      return null;
+    }
+    if (!session) {
+      console.log('No session found');
+      return null;
+    }
+    return session;
+  };
+
+  // Update createNewConversation
+  const createNewConversation = async () => {
+    try {
+      // Refresh session first
+      const session = await refreshSession();
+      if (!session) {
+        navigate('/signin');
+        return;
+      }
+
+      const { data: userData, error: authError } = await supabase.auth.getUser();
+      console.log('Auth response:', userData);
+
+      if (authError) {
+        console.error('Auth error:', authError);
+        return;
+      }
+
+      if (!selectedOrg || !userData?.user?.id) {
+        console.error('Missing required data:', { 
+          selectedOrg, 
+          userId: userData?.user?.id 
+        });
+        return;
+      }
+
+      // Create conversation
+      const { data: conversationData, error: conversationError } = await supabase
+        .from('conversations')
+        .insert([
+          {
+            organizations_id: selectedOrg,
+            channels: 'chat',
+            status: 'active'
+          }
+        ])
+        .select('*')
+        .single();
+
+      console.log('Conversation creation result:', { data: conversationData, error: conversationError });
+
+      if (conversationError) {
+        console.error('Error creating conversation:', conversationError);
+        return;
+      }
+
+      if (conversationData) {
+        // Create initial message
+        const { data: messageData, error: messageError } = await supabase
+          .from('messages')
+          .insert([
+            {
+              conversations_id: conversationData.id,
+              organizations_id: selectedOrg,
+              content: 'Conversation started',
+              sender_id: userData.user.id,
+              sender_name: userData.user.email || 'System',
+              sender_type: 'system'
+            }
+          ])
+          .select('*')
+          .single();
+
+        console.log('Message creation result:', { data: messageData, error: messageError });
+
+        if (messageError) {
+          console.error('Error creating initial message:', messageError);
+          return;
+        }
+
+        // Select the new conversation
+        setSelectedApp(conversationData.id);
+        
+        // Trigger a refresh of conversations
+        await fetchConversations();
+      }
+    } catch (error) {
+      console.error('Error in createNewConversation:', error);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
       <div className="w-16 bg-[#FDF6E3] border-r border-[#8B4513] flex flex-col items-center py-4">
+        {/* Logo Section - Simplified */}
         <div className="mb-8">
           <img src="/favicon.ico" alt="Logo" className="w-8 h-8" />
         </div>
         
+        {/* Rest of the sidebar navigation */}
         <nav className="flex flex-col space-y-4 flex-1">
           <button
             onClick={() => setSelectedNav('inbox')}
@@ -257,8 +571,30 @@ const Dashboard = () => {
         {/* Header */}
         <div className="p-4 border-b border-[#8B4513]">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-[#3C1810]">Inbox</h2>
-            <button className="text-[#3C1810] hover:bg-[#F5E6D3] p-1 rounded">
+            <div className="flex items-center space-x-3">
+              {selectedOrg && organizations.find(org => org.id === selectedOrg) && (
+                <div className="w-8 h-8 rounded overflow-hidden">
+                  {organizations.find(org => org.id === selectedOrg)?.logoUrl ? (
+                    <img 
+                      src={organizations.find(org => org.id === selectedOrg)?.logoUrl} 
+                      alt="Organization Logo" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 bg-[#8B4513] flex items-center justify-center text-[#FDF6E3] rounded">
+                      <span className="text-sm font-semibold">
+                        {organizations.find(org => org.id === selectedOrg)?.name.charAt(0)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <h2 className="text-lg font-semibold text-[#3C1810]">Inbox</h2>
+            </div>
+            <button 
+              onClick={createNewConversation}
+              className="text-[#3C1810] hover:bg-[#F5E6D3] p-1 rounded"
+            >
               <IconPlus size={20} />
             </button>
           </div>
@@ -274,23 +610,43 @@ const Dashboard = () => {
 
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto">
-          {apps.map((app) => (
+          {conversations.map((conversation) => (
             <button
-              key={app.id}
-              onClick={() => setSelectedApp(app.id)}
-              className={`w-full p-4 flex items-start space-x-3 border-b border-[#8B4513] ${
-                selectedApp === app.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
+              key={conversation.id}
+              onClick={() => setSelectedApp(conversation.id)}
+              className={`w-full p-4 flex flex-col border-b border-[#8B4513] ${
+                selectedApp === conversation.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
               }`}
             >
-              <div className="w-10 h-10 rounded bg-[#8B4513] flex items-center justify-center text-[#FDF6E3]">
-                <app.icon size={20} />
-              </div>
-              <div className="flex-1 text-left">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-[#3C1810]">{app.name}</span>
-                  <span className="text-sm text-[#5C2E0E]">{app.time}</span>
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-medium text-[#3C1810]">
+                  {conversation.latest_message?.sender_name || 'New Conversation'}
+                </span>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs px-2 py-1 rounded bg-[#8B4513] text-[#FDF6E3]">
+                    {conversation.channels}
+                  </span>
+                  <span className="text-sm text-[#5C2E0E]">
+                    {new Date(conversation.latest_message?.created_at || conversation.created_at).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
                 </div>
-                <p className="text-sm text-[#5C2E0E] truncate">{app.description}</p>
+              </div>
+              {conversation.latest_message && (
+                <p className="text-sm text-[#5C2E0E] truncate">
+                  {conversation.latest_message.content}
+                </p>
+              )}
+              <div className="mt-1">
+                <span className={`text-xs px-2 py-1 rounded ${
+                  conversation.status === 'active' ? 'bg-green-100 text-green-800' :
+                  conversation.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                  'bg-gray-100 text-gray-800'
+                }`}>
+                  {conversation.status}
+                </span>
               </div>
             </button>
           ))}
