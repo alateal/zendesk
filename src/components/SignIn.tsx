@@ -23,8 +23,7 @@ const SignIn = () => {
       if (error) throw error
 
       if (data.user) {
-        // Successful sign in, redirect to dashboard or home
-        navigate('/')
+        navigate('/dashboard')
       }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'An error occurred during sign in')
@@ -124,4 +123,4 @@ const SignIn = () => {
   )
 }
 
-export default SignIn 
+export default SignIn
