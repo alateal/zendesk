@@ -1,36 +1,59 @@
 import { useState, useEffect } from 'react';
-import { 
-  IconInbox, 
-  IconBook, 
-  IconBrandSlack, 
-  IconBrandDiscord, 
-  IconMail, 
-  IconLogout,
-  IconRobot,
-  IconUsers,
-  IconChartBar,
-  IconSend,
-  IconPlus,
-  IconSearch,
-  IconDotsVertical,
-  IconInbox as IconTickets,
-  IconSettings,
-  IconUser
-} from '@tabler/icons-react';
-import { useAuth } from '../contexts/AuthContext';
+import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
+import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
+import IconBrandSlack from '@tabler/icons-react/dist/esm/icons/IconBrandSlack';
+import IconBrandDiscord from '@tabler/icons-react/dist/esm/icons/IconBrandDiscord';
+import IconMail from '@tabler/icons-react/dist/esm/icons/IconMail';
+import IconLogout from '@tabler/icons-react/dist/esm/icons/IconLogout';
+import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
+import IconUsers from '@tabler/icons-react/dist/esm/icons/IconUsers';
+import IconChartBar from '@tabler/icons-react/dist/esm/icons/IconChartBar';
+import IconSend from '@tabler/icons-react/dist/esm/icons/IconSend';
+import IconPlus from '@tabler/icons-react/dist/esm/icons/IconPlus';
+import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
+import IconDotsVertical from '@tabler/icons-react/dist/esm/icons/IconDotsVertical';
+import IconTickets from '@tabler/icons-react/dist/esm/icons/IconInbox';
+import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
+import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
 import { useNavigate } from 'react-router-dom';
-import { RealtimeChannel } from '@supabase/supabase-js';
 import supabase from '../supabase';
 import { Message } from '../types/supabase';
 
 const Dashboard = () => {
-  const { signOut, user } = useAuth();
   const navigate = useNavigate();
   const [selectedNav, setSelectedNav] = useState('inbox');
   const [selectedApp, setSelectedApp] = useState('whatsapp');
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
-  const [channel, setChannel] = useState<RealtimeChannel | null>(null);
+
+  // Check authentication when component mounts
+  useEffect(() => {
+    checkUser();
+  }, []); // Empty dependency array means this runs once when component mounts
+
+  // Function to check if user is authenticated
+  const checkUser = async () => {
+    // Get the current session from Supabase
+    const { data: { session } } = await supabase.auth.getSession();
+    
+    // If no session exists, redirect to sign in page
+    if (!session) {
+      navigate('/signin');
+      return;
+    }
+
+    // Optional: You can store the user data in state if needed
+    // const user = session.user;
+    // setUser(user);
+  };
+
+  // Handle sign out
+  const handleSignOut = async () => {
+    // Sign out from Supabase
+    await supabase.auth.signOut();
+    // Redirect to sign in page
+    navigate('/signin');
+  };
 
   const apps = [
     { 
@@ -62,11 +85,6 @@ const Dashboard = () => {
       time: '2h'
     },
   ];
-
-  const handleSignOut = async () => {
-    await signOut();
-    navigate('/signin');
-  };
 
   // Function to load initial messages
   const loadMessages = async (conversationId: string) => {
@@ -109,8 +127,6 @@ const Dashboard = () => {
       )
       .subscribe();
 
-    setChannel(channel);
-
     // Cleanup subscription
     return () => {
       channel.unsubscribe();
@@ -119,20 +135,18 @@ const Dashboard = () => {
 
   // Function to send message
   const sendMessage = async () => {
-    if (!message.trim() || !user) return;
+    if (!message.trim()) return;
 
     try {
-      const newMessage = {
-        content: message,
-        user_id: user.id,
-        conversation_id: selectedApp,
-        sender_name: user.email,
-        sender_type: 'user' as const,
-      };
-
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('messages')
-        .insert([newMessage]);
+        .insert([{
+          content: message,
+          user_id: 'user',
+          conversation_id: selectedApp,
+          sender_name: 'User',
+          sender_type: 'user' as const,
+        }]);
 
       if (error) throw error;
 
@@ -336,12 +350,12 @@ const Dashboard = () => {
                 <div
                   key={msg.id}
                   className={`max-w-2xl ${
-                    msg.user_id === user?.id ? 'ml-auto' : 'mr-auto'
+                    msg.user_id === 'user' ? 'ml-auto' : 'mr-auto'
                   }`}
                 >
                   <div
                     className={`rounded-lg p-4 ${
-                      msg.user_id === user?.id
+                      msg.user_id === 'user'
                         ? 'bg-[#8B4513] text-[#FDF6E3]'
                         : 'bg-white border border-[#8B4513]'
                     }`}

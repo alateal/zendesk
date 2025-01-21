@@ -20,13 +20,17 @@ const SignIn = () => {
         password,
       })
 
-      if (error) throw error
+      if (error) {
+        setError(error.message)
+        return
+      }
 
       if (data.user) {
         navigate('/dashboard')
       }
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'An error occurred during sign in')
+      setError('An unexpected error occurred')
+      console.error(error)
     } finally {
       setLoading(false)
     }
@@ -123,4 +127,4 @@ const SignIn = () => {
   )
 }
 
-export default SignIn
+export default SignIn 
