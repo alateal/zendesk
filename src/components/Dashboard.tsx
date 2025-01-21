@@ -2,19 +2,15 @@ import { useState, useEffect } from 'react';
 import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
 import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
 import IconBrandSlack from '@tabler/icons-react/dist/esm/icons/IconBrandSlack';
-import IconBrandDiscord from '@tabler/icons-react/dist/esm/icons/IconBrandDiscord';
 import IconMail from '@tabler/icons-react/dist/esm/icons/IconMail';
 import IconLogout from '@tabler/icons-react/dist/esm/icons/IconLogout';
 import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
-import IconUsers from '@tabler/icons-react/dist/esm/icons/IconUsers';
 import IconChartBar from '@tabler/icons-react/dist/esm/icons/IconChartBar';
 import IconSend from '@tabler/icons-react/dist/esm/icons/IconSend';
 import IconPlus from '@tabler/icons-react/dist/esm/icons/IconPlus';
 import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
 import IconDotsVertical from '@tabler/icons-react/dist/esm/icons/IconDotsVertical';
-import IconTickets from '@tabler/icons-react/dist/esm/icons/IconInbox';
 import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
-import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 
@@ -271,76 +267,67 @@ const Dashboard = () => {
   // Add this console log in the render to verify the state
   console.log('Current organizations state:', organizations);
 
-  // Update the conversations fetch effect
+  const fetchConversations = async () => {
+    try {
+      console.log('Fetching conversations for org:', selectedOrg);
+      
+      const { data: conversationsData, error: conversationsError } = await supabase
+        .from('conversations')
+        .select(`
+          id,
+          created_at,
+          organizations_id,
+          channels,
+          status,
+          customer_id,
+          customers!conversations_customer_id_fkey (
+            id,
+            full_name,
+            email
+          ),
+          messages!messages_conversations_id_fkey (
+            id,
+            content,
+            sender_id,
+            sender_type,
+            created_at,
+            conversations_id
+          )
+        `)
+        .eq('organizations_id', selectedOrg)
+        .order('created_at', { ascending: false });
+
+      if (conversationsError) throw conversationsError;
+
+      if (conversationsData && conversationsData.length > 0) {
+        const conversationsWithMessages = conversationsData.map(conv => {
+          const messages = conv.messages || [];
+          const sortedMessages = messages.sort((a, b) => 
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+          
+          const latestMessage = sortedMessages[sortedMessages.length - 1];
+
+          return {
+            ...conv,
+            customer_name: conv.customers?.full_name || 'Unknown Customer',
+            latest_message: latestMessage
+          };
+        });
+
+        setConversations(conversationsWithMessages);
+      }
+    } catch (error) {
+      console.error('Error in fetchConversations:', error);
+    }
+  };
+
   useEffect(() => {
     if (!selectedOrg) {
       console.log('No organization selected, skipping subscription setup');
       return;
     }
 
-    const fetchConversations = async () => {
-      try {
-        console.log('Fetching conversations for org:', selectedOrg);
-        
-        // Get conversations with their customer details and messages
-        const { data: conversationsData, error: conversationsError } = await supabase
-          .from('conversations')
-          .select(`
-            id,
-            created_at,
-            organizations_id,
-            channels,
-            status,
-            customer_id,
-            customers!conversations_customer_id_fkey (
-              id,
-              full_name,
-              email
-            ),
-            messages!messages_conversations_id_fkey (
-              id,
-              content,
-              sender_id,
-              sender_type,
-              created_at,
-              conversations_id
-            )
-          `)
-          .eq('organizations_id', selectedOrg)
-          .order('created_at', { ascending: false });
-
-        if (conversationsError) {
-          console.error('Error fetching conversations:', conversationsError);
-          return;
-        }
-
-        console.log('Full conversations data:', conversationsData);
-
-        if (conversationsData && conversationsData.length > 0) {
-          const conversationsWithMessages = conversationsData.map(conv => {
-            const messages = conv.messages || [];
-            const sortedMessages = messages.sort((a, b) => 
-              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-            );
-            
-            const latestMessage = sortedMessages[sortedMessages.length - 1];
-
-            return {
-              ...conv,
-              customer_name: conv.customers?.full_name || 'Unknown Customer',
-              latest_message: latestMessage
-            };
-          });
-
-          console.log('Processed conversations:', conversationsWithMessages);
-          setConversations(conversationsWithMessages);
-        }
-      } catch (error) {
-        console.error('Error in fetchConversations:', error);
-      }
-    };
-
-    // Initial fetch
     fetchConversations();
 
     // Set up real-time subscription without filters
