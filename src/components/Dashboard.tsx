@@ -31,9 +31,14 @@ type Conversation = {
   organizations_id: string;
   channels: string;
   status: string;
+  customer_name: string;
+  customers?: {
+    id: string;
+    full_name: string;
+    email: string;
+  };
   latest_message?: {
     sender_id: string;
-    sender_name: string;
     sender_type: string;
     content: string;
     created_at: string;
@@ -48,6 +53,13 @@ type Message = {
   sender_name: string;
   sender_type: string;
   content: string;
+};
+
+// Add this type for insights
+type InsightType = {
+  label: string;
+  value: string | number;
+  icon: React.ReactNode;
 };
 
 const Dashboard = () => {
@@ -124,13 +136,20 @@ const Dashboard = () => {
   // Function to load initial messages
   const loadMessages = async (conversationId: string) => {
     try {
+      console.log('Loading messages for conversation:', conversationId);
+      
       const { data, error } = await supabase
         .from('messages')
         .select('*')
-        .eq('organizations_id', selectedOrg)
+        .eq('conversations_id', conversationId)  // Filter by conversation_id instead of organizations_id
         .order('created_at', { ascending: true });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error loading messages:', error);
+        return;
+      }
+
+      console.log('Loaded messages:', data);
       if (data) setMessages(data);
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -177,7 +196,7 @@ const Dashboard = () => {
 
   // Function to send message
   const sendMessage = async () => {
-    if (!message.trim()) return;
+    if (!message.trim() || !selectedApp) return;
 
     try {
       const { data, error } = await supabase
@@ -185,6 +204,7 @@ const Dashboard = () => {
         .insert([{
           content: message,
           sender_id: 'user',
+          conversations_id: selectedApp,  // Add the conversation ID
           organizations_id: selectedOrg,
           sender_name: 'User',
           sender_type: 'user' as const,
@@ -262,14 +282,7 @@ const Dashboard = () => {
       try {
         console.log('Fetching conversations for org:', selectedOrg);
         
-        // First try to get just conversations without joins
-        const { data: simpleData, error: simpleError } = await supabase
-          .from('conversations')
-          .select('*')
-        
-        console.log('Simple conversations query result:', { data: simpleData, error: simpleError });
-
-        // Then try the full query with joins
+        // Get conversations with their customer details and messages
         const { data: conversationsData, error: conversationsError } = await supabase
           .from('conversations')
           .select(`
@@ -278,11 +291,16 @@ const Dashboard = () => {
             organizations_id,
             channels,
             status,
-            messages (
+            customer_id,
+            customers!conversations_customer_id_fkey (
+              id,
+              full_name,
+              email
+            ),
+            messages!messages_conversations_id_fkey (
               id,
               content,
               sender_id,
-              sender_name,
               sender_type,
               created_at,
               conversations_id
@@ -295,39 +313,27 @@ const Dashboard = () => {
           console.error('Error fetching conversations:', conversationsError);
           return;
         }
-        
+
         console.log('Full conversations data:', conversationsData);
 
         if (conversationsData && conversationsData.length > 0) {
-          const conversationsWithLatestMessage = conversationsData.map(conv => {
+          const conversationsWithMessages = conversationsData.map(conv => {
             const messages = conv.messages || [];
-            console.log(`Messages for conversation ${conv.id}:`, messages);
+            const sortedMessages = messages.sort((a, b) => 
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
             
-            const latestMessage = messages.length > 0 
-              ? messages.sort((a, b) => 
-                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-                )[0]
-              : undefined;
+            const latestMessage = sortedMessages[sortedMessages.length - 1];
 
             return {
               ...conv,
+              customer_name: conv.customers?.full_name || 'Unknown Customer',
               latest_message: latestMessage
             };
           });
 
-          console.log('Final processed conversations:', conversationsWithLatestMessage);
-          setConversations(conversationsWithLatestMessage);
-        } else {
-          console.log('No conversations found for organization:', selectedOrg);
-          
-          // Debug: Check if the organization exists
-          const { data: orgData } = await supabase
-            .from('organizations')
-            .select('*')
-            .eq('id', selectedOrg)
-            .single();
-            
-          console.log('Organization data:', orgData);
+          console.log('Processed conversations:', conversationsWithMessages);
+          setConversations(conversationsWithMessages);
         }
       } catch (error) {
         console.error('Error in fetchConversations:', error);
@@ -486,6 +492,38 @@ const Dashboard = () => {
     }
   };
 
+  // Add this function to get the current conversation
+  const getCurrentConversation = () => {
+    return conversations.find(conv => conv.id === selectedApp);
+  };
+
+  // Add this function to get insights for the current conversation
+  const getConversationInsights = (): InsightType[] => {
+    const conversation = getCurrentConversation();
+    return [
+      {
+        label: 'Channel',
+        value: conversation?.channels || '-',
+        icon: <IconBrandSlack size={20} />
+      },
+      {
+        label: 'Status',
+        value: conversation?.status || '-',
+        icon: <IconInbox size={20} />
+      },
+      {
+        label: 'Response Time',
+        value: '2m',
+        icon: <IconChartBar size={20} />
+      },
+      {
+        label: 'Messages',
+        value: messages.length,
+        icon: <IconMail size={20} />
+      }
+    ];
+  };
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
@@ -620,7 +658,7 @@ const Dashboard = () => {
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="font-medium text-[#3C1810]">
-                  {conversation.latest_message?.sender_name || 'New Conversation'}
+                  {conversation.customer_name}
                 </span>
                 <div className="flex items-center space-x-2">
                   <span className="text-xs px-2 py-1 rounded bg-[#8B4513] text-[#FDF6E3]">
@@ -641,8 +679,9 @@ const Dashboard = () => {
               )}
               <div className="mt-1">
                 <span className={`text-xs px-2 py-1 rounded ${
+                  conversation.status === 'new' ? 'bg-orange-100 text-orange-800' :
                   conversation.status === 'active' ? 'bg-green-100 text-green-800' :
-                  conversation.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                  conversation.status === 'closed' ? 'bg-yellow-100 text-yellow-800' :
                   'bg-gray-100 text-gray-800'
                 }`}>
                   {conversation.status}
@@ -654,106 +693,149 @@ const Dashboard = () => {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
-        {/* Chat Header - Updated */}
-        <div className="h-16 border-b border-[#8B4513] px-6 flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <div className="w-8 h-8 rounded bg-[#8B4513] flex items-center justify-center text-[#FDF6E3]">
-              {(() => {
-                const currentApp = apps.find(app => app.id === selectedApp);
-                if (currentApp && currentApp.icon) {
-                  const Icon = currentApp.icon;
-                  return <Icon size={20} />;
-                }
-                return null;
-              })()}
+      <div className="flex-1 flex">
+        {/* Chat Area */}
+        <div className="flex-1 flex flex-col">
+          {/* Chat Header */}
+          <div className="p-4 border-b border-[#8B4513] flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="flex flex-col">
+                <h2 className="text-lg font-semibold text-[#3C1810]">
+                  {getCurrentConversation()?.channels || 'New Chat'}
+                </h2>
+                <span className="text-sm text-[#5C2E0E]">
+                  {getCurrentConversation()?.status || ''}
+                </span>
+              </div>
             </div>
-            <h2 className="text-lg font-semibold text-[#3C1810]">
-              {getCurrentConversationTitle()}
-            </h2>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button className="p-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg">
-              <IconUser size={20} />
-            </button>
-            <button className="p-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg">
+            <button className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded">
               <IconDotsVertical size={20} />
             </button>
           </div>
-        </div>
 
-        {/* Messages */}
-        <div className="flex-1 p-6 overflow-y-auto">
-          {messages.length === 0 ? (
-            <div className="bg-white rounded-lg shadow-lg p-6 max-w-2xl mx-auto">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="bg-[#8B4513] text-[#FDF6E3] px-3 py-1 rounded-full text-sm">
-                  Demo Message
-                </div>
-              </div>
-              <p className="text-[#3C1810] mb-4">
-                This is a demo message. It shows how a customer conversation from WhatsApp, 
-                Instagram or Facebook will look in your Inbox.
-              </p>
-              <p className="text-[#5C2E0E] text-sm">
-                Once a channel is set up, all conversations come straight to your Inbox, 
-                so you can route them to the right team.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`max-w-2xl ${
-                    msg.user_id === 'user' ? 'ml-auto' : 'mr-auto'
-                  }`}
-                >
-                  <div
-                    className={`rounded-lg p-4 ${
-                      msg.user_id === 'user'
-                        ? 'bg-[#8B4513] text-[#FDF6E3]'
-                        : 'bg-white border border-[#8B4513]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-medium">
-                        {msg.sender_name || 'Unknown'}
-                      </span>
-                      <span className="text-xs opacity-75">
-                        {new Date(msg.created_at).toLocaleTimeString()}
-                      </span>
-                    </div>
-                    <p>{msg.content}</p>
+          {/* Messages */}
+          <div className="flex-1 p-6 overflow-y-auto bg-[#FDF6E3]">
+            {messages.length === 0 ? (
+              <div className="bg-[#F5E6D3] rounded-lg border border-[#8B4513] p-6 max-w-2xl mx-auto">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="bg-[#8B4513] text-[#FDF6E3] px-3 py-1 rounded-full text-sm">
+                    Demo Message
                   </div>
                 </div>
-              ))}
+                <p className="text-[#3C1810] mb-4">
+                  This is a demo message. It shows how a customer conversation from WhatsApp, 
+                  Instagram or Facebook will look in your Inbox.
+                </p>
+                <p className="text-[#5C2E0E] text-sm">
+                  Once a channel is set up, all conversations come straight to your Inbox, 
+                  so you can route them to the right team.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`max-w-2xl ${
+                      msg.sender_type === 'user' ? 'ml-auto' : 'mr-auto'
+                    }`}
+                  >
+                    <div
+                      className={`rounded-lg p-4 ${
+                        msg.sender_type === 'user'
+                          ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
+                          : msg.sender_type === 'system'
+                          ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
+                          : 'bg-[#FFFFFF] text-[#3C1810] border border-[#8B4513]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`text-sm font-medium ${
+                          msg.sender_type === 'user' || msg.sender_type === 'system'
+                            ? 'text-[#5C2E0E]'
+                            : 'text-[#5C2E0E]'
+                        }`}>
+                          {msg.sender_type === 'user' 
+                            ? 'Agent' 
+                            : getCurrentConversation()?.customer_name || 'Unknown Customer'}
+                        </span>
+                        <span className={`text-xs ${
+                          msg.sender_type === 'user' || msg.sender_type === 'system'
+                            ? 'text-[#5C2E0E] opacity-75'
+                            : 'text-[#5C2E0E] opacity-75'
+                        }`}>
+                          {new Date(msg.created_at).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                      <p className={
+                        msg.sender_type === 'user' || msg.sender_type === 'system'
+                          ? 'text-[#3C1810]'
+                          : 'text-[#3C1810]'
+                      }>
+                        {msg.content}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Input Box */}
+          <div className="p-4 border-t border-[#8B4513]">
+            <div className="flex space-x-4">
+              <input
+                type="text"
+                placeholder="Type your message..."
+                className="flex-1 px-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+              />
+              <button 
+                onClick={sendMessage}
+                className="px-6 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center space-x-2"
+              >
+                <IconSend size={20} />
+                <span>Send</span>
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Input Box */}
-        <div className="border-t border-[#8B4513] p-4">
-          <div className="flex space-x-4">
-            <input
-              type="text"
-              placeholder="Type your message..."
-              className="flex-1 px-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-            />
-            <button 
-              onClick={sendMessage}
-              className="px-6 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center space-x-2"
-            >
-              <IconSend size={20} />
-              <span>Send</span>
+        {/* Insights Sidebar */}
+        <div className="w-80 border-l border-[#8B4513] bg-[#FDF6E3] p-4">
+          <h3 className="text-lg font-semibold text-[#3C1810] mb-4">Insights</h3>
+          
+          <div className="space-y-4">
+            {getConversationInsights().map((insight, index) => (
+              <div 
+                key={index}
+                className="bg-[#F5E6D3] rounded-lg p-4 border border-[#8B4513]"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-[#5C2E0E]">{insight.label}</span>
+                  <span className="text-[#3C1810]">{insight.icon}</span>
+                </div>
+                <div className="text-lg font-semibold text-[#3C1810]">
+                  {insight.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Additional Insights or Actions */}
+          <div className="mt-6">
+            <button className="w-full bg-[#8B4513] text-[#FDF6E3] py-2 px-4 rounded-lg hover:bg-[#5C2E0E] transition-colors border border-[#3C1810]">
+              View Full Analytics
             </button>
           </div>
         </div>

@@ -6,6 +6,7 @@ import LandingPage from './components/LandingPage'
 import SignIn from './components/SignIn'
 import SignUp from './components/SignUp'
 import Dashboard from './components/Dashboard'
+import Chanel from './components/Chanel'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -15,6 +16,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/chanel" element={<Chanel />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

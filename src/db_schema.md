@@ -33,6 +33,7 @@
 - **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
 - **channels**: `text`
 - **status**: `text`
+- **customer_id**: `text`(Foreign Key to `customers.id`)
 
 
 ---
@@ -47,4 +48,12 @@
 - **sender_type**: `text`
 - **content**: `text`
 
+---
+
+## `customers`
+- **id**: `uuid` (Primary Key)
+- **created_at**: `timestamptz`
+- **full_name**: `text`
+- **email**: `text`
+- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
 

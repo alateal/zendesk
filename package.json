@@ -10,8 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.731.1",
     "@supabase/supabase-js": "^2.47.16",
     "@tabler/icons-react": "^3.28.1",
+    "aws-amplify": "^6.12.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.1.3",
