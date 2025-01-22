@@ -23,28 +23,38 @@ const Chanel = () => {
     sender_type: string;
   }>>([]);
 
+  useEffect(() => {
+    // Load user info from localStorage on mount
+    const savedUserInfo = localStorage.getItem('chatUserInfo');
+    if (savedUserInfo) {
+      setUserInfo(JSON.parse(savedUserInfo));
+    }
+
+    const savedConversationId = localStorage.getItem('chatConversationId');
+    if (savedConversationId) {
+      setConversationId(savedConversationId);
+    }
+  }, []);
+
   const handleSubmitUserInfo = async (e: React.FormEvent) => {
     e.preventDefault();
     
     try {
-      // First check if customer exists
       const { data: existingCustomer, error: searchError } = await supabase
         .from('customers')
         .select('*')
         .eq('email', formData.email)
         .single();
 
-      if (searchError && searchError.code !== 'PGRST116') { // PGRST116 is "not found" error
+      if (searchError && searchError.code !== 'PGRST116') {
         throw searchError;
       }
 
       let customerData;
       
       if (existingCustomer) {
-        // Use existing customer data
         customerData = existingCustomer;
       } else {
-        // Create new customer
         const { data: newCustomer, error: insertError } = await supabase
           .from('customers')
           .insert([{
@@ -59,11 +69,14 @@ const Chanel = () => {
         customerData = newCustomer;
       }
 
-      // Set user info for chat
-      setUserInfo({
+      const userInfo = {
         fullName: customerData.full_name,
         email: customerData.email
-      });
+      };
+
+      // Save to localStorage
+      localStorage.setItem('chatUserInfo', JSON.stringify(userInfo));
+      setUserInfo(userInfo);
 
     } catch (error) {
       console.error('Error handling customer info:', error);
@@ -75,7 +88,6 @@ const Chanel = () => {
     if (!message.trim() || !userInfo) return;
 
     try {
-      // First, get customer_id using email
       const { data: customer, error: customerError } = await supabase
         .from('customers')
         .select('id')
@@ -86,7 +98,6 @@ const Chanel = () => {
 
       let currentConversationId = conversationId;
 
-      // If no conversation exists, create one
       if (!currentConversationId) {
         const { data: newConversation, error: conversationError } = await supabase
           .from('conversations')
@@ -102,6 +113,8 @@ const Chanel = () => {
         if (conversationError) throw conversationError;
         currentConversationId = newConversation.id;
         setConversationId(newConversation.id);
+        // Save to localStorage
+        localStorage.setItem('chatConversationId', newConversation.id);
       }
 
       // Send the message
@@ -124,6 +137,15 @@ const Chanel = () => {
       console.error('Error sending message:', error);
       alert('Error sending message. Please try again.');
     }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('chatUserInfo');
+    localStorage.removeItem('chatConversationId');
+    setUserInfo(null);
+    setConversationId(null);
+    setMessages([]);
+    setIsOpen(false);
   };
 
   useEffect(() => {
@@ -210,12 +232,22 @@ const Chanel = () => {
             {/* Chat Header */}
             <div className="p-4 border-b border-black flex justify-between items-center bg-black text-[#FFFFF0] rounded-t-lg">
               <h3 className="font-semibold">Chat with CHANEL</h3>
-              <button
-                onClick={() => setIsOpen(false)}
-                className="hover:bg-neutral-800 p-1 rounded"
-              >
-                <IconX size={20} />
-              </button>
+              <div className="flex gap-2">
+                {userInfo && (
+                  <button
+                    onClick={handleLogout}
+                    className="hover:bg-neutral-800 p-1 rounded text-sm"
+                  >
+                    Logout
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="hover:bg-neutral-800 p-1 rounded"
+                >
+                  <IconX size={20} />
+                </button>
+              </div>
             </div>
 
             {/* User Info Form or Chat Interface */}
@@ -308,6 +340,12 @@ const Chanel = () => {
                       type="text"
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage();
+                        }
+                      }}
                       placeholder="Type your message..."
                       className="flex-1 px-3 py-2 rounded border border-black focus:outline-none focus:ring-2 focus:ring-black bg-[#FFFFF0]"
                     />

@@ -98,37 +98,6 @@ const Dashboard = () => {
     navigate('/signin');
   };
 
-  const apps = [
-    { 
-      id: 'messenger', 
-      name: 'Messenger', 
-      icon: IconBrandSlack, 
-      description: 'Install Messenger',
-      time: '2h' 
-    },
-    { 
-      id: 'email', 
-      name: 'Email', 
-      icon: IconMail, 
-      description: 'This is a demo email. It shows...',
-      time: '2h'
-    },
-    { 
-      id: 'whatsapp', 
-      name: 'WhatsApp', 
-      icon: IconBrandSlack, 
-      description: 'Set up WhatsApp or social ch...',
-      time: '2h'
-    },
-    { 
-      id: 'phone', 
-      name: 'Phone', 
-      icon: IconMail, 
-      description: 'Set up phone or SMS',
-      time: '2h'
-    },
-  ];
-
   // Function to load initial messages
   const loadMessages = async (conversationId: string) => {
     try {
@@ -635,7 +604,6 @@ const Dashboard = () => {
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto">
           {conversations.map((conversation) => {
-            // Find the latest customer message
             const customerMessages = conversation.messages?.filter(msg => msg.sender_type === 'customer') || [];
             const latestCustomerMessage = customerMessages.length > 0 
               ? customerMessages[customerMessages.length - 1] 
@@ -649,15 +617,27 @@ const Dashboard = () => {
                   selectedApp === conversation.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium text-[#3C1810]">
-                    {conversation.customer_name}
+                <div className="mb-2 flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    conversation.status === 'New' ? 'bg-orange-500' :
+                    conversation.status === 'Active' ? 'bg-green-500' :
+                    'bg-gray-400'
+                  }`} />
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    conversation.status === 'New' ? 'bg-orange-100 text-orange-800' :
+                    conversation.status === 'Active' ? 'bg-green-100 text-green-800' :
+                    conversation.status === 'Closed' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {conversation.status}
                   </span>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs px-2 py-1 rounded bg-[#8B4513] text-[#FDF6E3]">
-                      {conversation.channels}
+                </div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-[#3C1810]">
+                      {conversation.customer_name}
                     </span>
-                    <span className="text-sm text-[#5C2E0E]">
+                    <span className="text-xs text-[#5C2E0E] opacity-75">
                       {new Date(latestCustomerMessage?.created_at || conversation.created_at).toLocaleTimeString([], {
                         hour: '2-digit',
                         minute: '2-digit'
@@ -670,16 +650,6 @@ const Dashboard = () => {
                     {latestCustomerMessage.content}
                   </p>
                 )}
-                <div className="mt-1">
-                  <span className={`text-xs px-2 py-1 rounded ${
-                    conversation.status === 'New' ? 'bg-orange-100 text-orange-800' :
-                    conversation.status === 'Active' ? 'bg-green-100 text-green-800' :
-                    conversation.status === 'Closed' ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {conversation.status}
-                  </span>
-                </div>
               </button>
             );
           })}

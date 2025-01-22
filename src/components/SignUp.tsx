@@ -5,7 +5,6 @@ import supabase from '../supabase'
 const SignUp = () => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [username, setUsername] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
@@ -21,9 +20,7 @@ const SignUp = () => {
         email,
         password,
         options: {
-          data: {
-            username: username
-          }
+          emailRedirectTo: window.location.origin + '/signin'
         }
       })
 
@@ -63,25 +60,6 @@ const SignUp = () => {
           )}
           
           <form className="space-y-6" onSubmit={handleSubmit}>
-            <div>
-              <label htmlFor="username" className="block text-sm font-medium text-[#3C1810]">
-                Username
-              </label>
-              <div className="mt-1">
-                <input
-                  id="username"
-                  name="username"
-                  type="text"
-                  autoComplete="username"
-                  required
-                  className="appearance-none block w-full px-3 py-2 border border-[#8B4513] rounded-md shadow-sm placeholder-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-            </div>
-
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-[#3C1810]">
                 Email address
