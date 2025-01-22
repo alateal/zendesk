@@ -11,6 +11,8 @@ import IconPlus from '@tabler/icons-react/dist/esm/icons/IconPlus';
 import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
 import IconDotsVertical from '@tabler/icons-react/dist/esm/icons/IconDotsVertical';
 import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
+import IconStarFilled from '@tabler/icons-react/dist/esm/icons/IconStarFilled';
+import IconStar from '@tabler/icons-react/dist/esm/icons/IconStar';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 
@@ -39,6 +41,8 @@ type Conversation = {
     content: string;
     created_at: string;
   };
+  satisfaction_score?: string;
+  is_important: boolean;
 };
 
 type Message = {
@@ -58,6 +62,12 @@ type InsightType = {
   icon: React.ReactNode;
 };
 
+// Add type for response time stats
+type ResponseTimeStats = {
+  averageResponseTime: number; // in minutes
+  totalResponses: number;
+};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const [selectedNav, setSelectedNav] = useState('inbox');
@@ -68,6 +78,15 @@ const Dashboard = () => {
   const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [newConversationsCount, setNewConversationsCount] = useState(0);
+  const [satisfactionStats, setSatisfactionStats] = useState({
+    averageScore: 0,
+    totalRatings: 0
+  });
+  const [responseTimeStats, setResponseTimeStats] = useState<ResponseTimeStats>({
+    averageResponseTime: 0,
+    totalResponses: 0
+  });
 
   // Check authentication when component mounts
   useEffect(() => {
@@ -247,6 +266,8 @@ const Dashboard = () => {
           organizations_id,
           channels,
           status,
+          satisfaction_score,
+          is_important,
           customer_id,
           customers!conversations_customer_id_fkey (
             id,
@@ -263,6 +284,7 @@ const Dashboard = () => {
           )
         `)
         .eq('organizations_id', selectedOrg)
+        .order('is_important', { ascending: false })
         .order('created_at', { ascending: false });
 
       if (conversationsError) throw conversationsError;
@@ -286,7 +308,7 @@ const Dashboard = () => {
         setConversations(conversationsWithMessages);
       }
     } catch (error) {
-      console.error('Error in fetchConversations:', error);
+      console.error('Error fetching conversations:', error);
     }
   };
 
@@ -479,6 +501,201 @@ const Dashboard = () => {
     ];
   };
 
+  // Add this function to handle status updates
+  const updateConversationStatus = async (conversationId: string, status: string) => {
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({ status })
+        .eq('id', conversationId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error updating conversation status:', error);
+    }
+  };
+
+  // Add useEffect for real-time status updates
+  useEffect(() => {
+    const channel = supabase
+      .channel('conversation-status')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'conversations',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          setConversations(current =>
+            current.map(conv =>
+              conv.id === payload.new.id
+                ? { ...conv, status: payload.new.status }
+                : conv
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [selectedOrg]);
+
+  // Update the conversation click handler
+  const handleConversationClick = async (conversationId: string) => {
+    setSelectedApp(conversationId);
+    
+    // Get current conversation
+    const conversation = conversations.find(conv => conv.id === conversationId);
+    
+    // Only update to Active if it's currently New
+    if (conversation?.status === 'New') {
+      await updateConversationStatus(conversationId, 'Active');
+    }
+  };
+
+  // Add close conversation handler
+  const handleCloseConversation = async () => {
+    if (!selectedApp) return;
+    
+    await updateConversationStatus(selectedApp, 'Closed');
+    setSelectedApp(null); // Optionally clear the selection
+  };
+
+  // Add useEffect to count new conversations
+  useEffect(() => {
+    const newCount = conversations.filter(conv => conv.status === 'New').length;
+    setNewConversationsCount(newCount);
+  }, [conversations]);
+
+  // Add real-time subscription for conversation changes
+  useEffect(() => {
+    if (!selectedOrg) return;
+
+    const channel = supabase
+      .channel('conversation-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+          schema: 'public',
+          table: 'conversations',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          // Fetch updated conversations to maintain accurate count
+          fetchConversations();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [selectedOrg]);
+
+  // Simplify the calculation function
+  const calculateSatisfactionStats = (conversations: Conversation[]) => {
+    const ratedConversations = conversations.filter(conv => conv.satisfaction_score);
+    const totalRatings = ratedConversations.length;
+    
+    if (totalRatings === 0) return { averageScore: 0, totalRatings: 0 };
+    
+    const sum = ratedConversations.reduce((acc, conv) => 
+      acc + Number(conv.satisfaction_score || 0), 0
+    );
+    
+    return {
+      averageScore: Math.floor(sum / totalRatings),
+      totalRatings
+    };
+  };
+
+  // Update useEffect for real-time satisfaction updates
+  useEffect(() => {
+    if (!selectedOrg) return;
+
+    // Subscribe to conversation updates
+    const channel = supabase
+      .channel('conversation-ratings')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'conversations',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          console.log('Satisfaction update received:', payload);
+          // Fetch fresh data when a rating is updated
+          fetchConversations();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [selectedOrg]);
+
+  // Update satisfaction stats when conversations change
+  useEffect(() => {
+    setSatisfactionStats(calculateSatisfactionStats(conversations));
+  }, [conversations]);
+
+  // Add function to calculate response time
+  const calculateResponseTime = (conversations: Conversation[]) => {
+    let totalTime = 0;
+    let responseCount = 0;
+
+    conversations.forEach(conv => {
+      if (!conv.messages) return;
+      
+      const sortedMessages = [...conv.messages].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
+      for (let i = 0; i < sortedMessages.length - 1; i++) {
+        const currentMsg = sortedMessages[i];
+        const nextMsg = sortedMessages[i + 1];
+
+        if (currentMsg.sender_type === 'customer' && nextMsg.sender_type === 'user') {
+          const timeDiff = new Date(nextMsg.created_at).getTime() - new Date(currentMsg.created_at).getTime();
+          totalTime += timeDiff;
+          responseCount++;
+        }
+      }
+    });
+
+    return {
+      averageResponseTime: responseCount > 0 ? Math.floor(totalTime / responseCount / 60000) : 0, // Convert to minutes
+      totalResponses: responseCount
+    };
+  };
+
+  // Update useEffect to calculate response time when conversations change
+  useEffect(() => {
+    setResponseTimeStats(calculateResponseTime(conversations));
+  }, [conversations]);
+
+  // Add toggle importance function
+  const toggleImportance = async (conversationId: string, currentValue: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('conversations')
+        .update({ is_important: !currentValue })
+        .eq('id', conversationId);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error toggling importance:', error);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
@@ -492,16 +709,18 @@ const Dashboard = () => {
         <nav className="flex flex-col space-y-4 flex-1">
           <button
             onClick={() => setSelectedNav('inbox')}
-            className={`p-2 rounded-lg relative ${
+            className={`relative p-3 rounded-lg ${
               selectedNav === 'inbox'
-                ? 'bg-[#8B4513] text-[#FDF6E3]'
-                : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+                ? 'bg-[#F5E6D3] text-[#3C1810]'
+                : 'text-[#5C2E0E] hover:bg-[#F5E6D3]'
             }`}
           >
             <IconInbox size={24} />
-            <span className="absolute top-0 right-0 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
-              4
-            </span>
+            {newConversationsCount > 0 && (
+              <div className="absolute -top-1 -right-1 bg-[#8B4513] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {newConversationsCount}
+              </div>
+            )}
           </button>
           
           <button
@@ -612,11 +831,12 @@ const Dashboard = () => {
             return (
               <button
                 key={conversation.id}
-                onClick={() => setSelectedApp(conversation.id)}
-                className={`w-full p-4 flex flex-col border-b border-[#8B4513] ${
+                className={`w-full p-4 flex flex-col border-b border-[#8B4513] relative ${
                   selectedApp === conversation.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
                 }`}
+                onClick={() => handleConversationClick(conversation.id)}
               >
+                {/* Status Section */}
                 <div className="mb-2 flex items-center gap-2">
                   <div className={`w-2 h-2 rounded-full ${
                     conversation.status === 'New' ? 'bg-orange-500' :
@@ -632,24 +852,43 @@ const Dashboard = () => {
                     {conversation.status}
                   </span>
                 </div>
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-[#3C1810]">
-                      {conversation.customer_name}
-                    </span>
-                    <span className="text-xs text-[#5C2E0E] opacity-75">
-                      {new Date(latestCustomerMessage?.created_at || conversation.created_at).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </span>
+
+                {/* Conversation Content */}
+                <div className="flex-1 pr-8">
+                  <div className="flex items-center mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-[#3C1810]">
+                        {conversation.customer_name}
+                      </span>
+                      <span className="text-xs text-[#5C2E0E] opacity-75">
+                        {new Date(latestCustomerMessage?.created_at || conversation.created_at).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    </div>
                   </div>
+                  {latestCustomerMessage && (
+                    <p className="text-sm text-[#5C2E0E] truncate">
+                      {latestCustomerMessage.content}
+                    </p>
+                  )}
                 </div>
-                {latestCustomerMessage && (
-                  <p className="text-sm text-[#5C2E0E] truncate">
-                    {latestCustomerMessage.content}
-                  </p>
-                )}
+
+                {/* Importance Toggle - Positioned absolutely */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleImportance(conversation.id, conversation.is_important);
+                  }}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-1 hover:bg-[#8B4513] hover:bg-opacity-10 rounded"
+                >
+                  {conversation.is_important ? (
+                    <IconStarFilled size={20} className="text-[#8B4513]" />
+                  ) : (
+                    <IconStar size={20} className="text-[#8B4513]" />
+                  )}
+                </button>
               </button>
             );
           })}
@@ -672,9 +911,17 @@ const Dashboard = () => {
                 </span>
               </div>
             </div>
-            <button className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded">
-              <IconDotsVertical size={20} />
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCloseConversation}
+                className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded"
+              >
+                Close Chat
+              </button>
+              <button className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded">
+                <IconDotsVertical size={20} />
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -780,6 +1027,56 @@ const Dashboard = () => {
           <h3 className="text-lg font-semibold text-[#3C1810] mb-4">Insights</h3>
           
           <div className="space-y-4">
+            {/* Response Time Box */}
+            <div className="bg-[#F5E6D3] rounded-lg p-4 border border-[#8B4513]">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-[#5C2E0E]">Avg. Response Time</span>
+                <span className="text-[#3C1810]">⏱️</span>
+              </div>
+              <div className="flex flex-col">
+                <div className="text-lg font-semibold text-[#3C1810]">
+                  {responseTimeStats.averageResponseTime < 1 
+                    ? '< 1 min' 
+                    : `${responseTimeStats.averageResponseTime} min`}
+                </div>
+                <div className="text-xs text-[#5C2E0E] mt-1">
+                  Based on {responseTimeStats.totalResponses} responses
+                </div>
+              </div>
+            </div>
+
+            {/* Satisfaction Score Box */}
+            <div className="bg-[#F5E6D3] rounded-lg p-4 border border-[#8B4513]">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-[#5C2E0E]">Satisfaction Rate</span>
+                <span className="text-[#3C1810]">
+                  <IconStarFilled size={20} />
+                </span>
+              </div>
+              <div className="flex flex-col">
+                <div className="text-lg font-semibold text-[#3C1810] flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span 
+                      key={star} 
+                      className={star <= satisfactionStats.averageScore 
+                        ? 'text-[#8B4513]' 
+                        : 'text-[#8B4513] opacity-30'
+                      }
+                    >
+                      ★
+                    </span>
+                  ))}
+                </div>
+                <div className="text-sm text-[#5C2E0E] mt-1">
+                  {satisfactionStats.averageScore} / 5
+                  <span className="text-xs ml-2">
+                    ({satisfactionStats.totalRatings} ratings)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Other insight boxes */}
             {getConversationInsights().map((insight, index) => (
               <div 
                 key={index}

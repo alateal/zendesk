@@ -34,6 +34,7 @@
 - **channels**: `text`
 - **status**: `text`
 - **customer_id**: `text`(Foreign Key to `customers.id`)
+- **satisfaction_score**: `text`
 
 
 ---

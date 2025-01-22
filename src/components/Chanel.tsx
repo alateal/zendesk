@@ -22,6 +22,9 @@ const Chanel = () => {
     created_at: string;
     sender_type: string;
   }>>([]);
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
 
   useEffect(() => {
     // Load user info from localStorage on mount
@@ -140,12 +143,37 @@ const Chanel = () => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('chatUserInfo');
-    localStorage.removeItem('chatConversationId');
-    setUserInfo(null);
-    setConversationId(null);
-    setMessages([]);
-    setIsOpen(false);
+    setShowRatingModal(true);
+  };
+
+  const handleFinalLogout = async (skipRating: boolean = false) => {
+    if (!skipRating && !rating) {
+      alert('Please select a rating before leaving');
+      return;
+    }
+
+    try {
+      if (!skipRating && rating && conversationId) {
+        setIsSubmittingRating(true);
+        const { error } = await supabase
+          .from('conversations')
+          .update({ satisfaction_score: rating.toString() })
+          .eq('id', conversationId);
+
+        if (error) throw error;
+      }
+    } catch (error) {
+      console.error('Error saving rating:', error);
+    } finally {
+      setIsSubmittingRating(false);
+      localStorage.removeItem('chatUserInfo');
+      localStorage.removeItem('chatConversationId');
+      setUserInfo(null);
+      setConversationId(null);
+      setMessages([]);
+      setIsOpen(false);
+      setShowRatingModal(false);
+    }
   };
 
   useEffect(() => {
@@ -362,6 +390,44 @@ const Chanel = () => {
           </div>
         )}
       </div>
+
+      {/* Rating Modal */}
+      {showRatingModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#FFFFF0] p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+            <h3 className="text-xl font-semibold text-center mb-4">
+              How satisfied were you with our service?
+            </h3>
+            <div className="flex justify-center space-x-2 mb-6">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  onClick={() => setRating(star)}
+                  className="text-3xl focus:outline-none transition-colors"
+                >
+                  {star <= rating ? '★' : '☆'}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-center space-x-4">
+              <button
+                onClick={() => handleFinalLogout(true)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
+                disabled={isSubmittingRating}
+              >
+                Skip
+              </button>
+              <button
+                onClick={() => handleFinalLogout(false)}
+                className="px-4 py-2 bg-black text-[#FFFFF0] rounded hover:bg-neutral-800"
+                disabled={isSubmittingRating}
+              >
+                {isSubmittingRating ? 'Submitting...' : 'Submit & Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
