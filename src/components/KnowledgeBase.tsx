@@ -18,9 +18,17 @@ import IconMaximize from '@tabler/icons-react/dist/esm/icons/IconMaximize';
 
 type Article = {
   id: string;
+  created_at: string;
+  organizations_id: string;
   title: string;
-  type: 'public' | 'internal';
-  status: 'published' | 'draft';
+  description: string;
+  content: string;
+  is_public: boolean;
+  is_published: boolean;
+  last_updated_at: string | null;
+  last_updated_by: string | null;
+  created_by: string;
+  enabled_ai: boolean;
 };
 
 const getCurrentUser = async () => {
@@ -48,13 +56,25 @@ const KnowledgeBase = () => {
   }>>([]);
   const [isArticleModalOpen, setIsArticleModalOpen] = useState(false);
   const [articleModalType, setArticleModalType] = useState<'public' | 'internal' | null>(null);
-  const [articleData, setArticleData] = useState({
+  const [articleData, setArticleData] = useState<Article>({
+    id: '',
+    created_at: new Date().toISOString(),
+    organizations_id: '',
     title: '',
     description: '',
     content: '',
-    type: 'public' as const,
-    status: 'draft' as const
+    is_public: true,
+    is_published: false,
+    last_updated_at: null,
+    last_updated_by: null,
+    created_by: currentUser?.id || '',
+    enabled_ai: false
   });
+  const [publicArticles, setPublicArticles] = useState<Article[]>([]);
+  const [internalArticles, setInternalArticles] = useState<Article[]>([]);
+  const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
+  const [selectedSection, setSelectedSection] = useState('sources');
+  const [isNewContentModalOpen, setIsNewContentModalOpen] = useState(false);
 
   // Handle click outside profile dropdown
   useEffect(() => {
@@ -107,6 +127,74 @@ const KnowledgeBase = () => {
     fetchUserData();
   }, []);
 
+  // Add this useEffect to fetch organizations and set selected org
+  useEffect(() => {
+    const fetchOrganizations = async () => {
+      const { data: orgs } = await supabase
+        .from('organizations')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (orgs && orgs.length > 0) {
+        setSelectedOrg(orgs[0].id);
+      }
+    };
+
+    fetchOrganizations();
+  }, []);
+
+  // Add this useEffect for initial fetch and real-time updates
+  useEffect(() => {
+    if (!selectedOrg) return;
+
+    // Initial fetch of articles
+    const fetchArticles = async () => {
+      const { data: articles, error } = await supabase
+        .from('articles')
+        .select(`
+          *,
+          created_by_user:users!articles_created_by_fkey(display_name),
+          last_updated_by_user:users!articles_last_updated_by_fkey(display_name)
+        `)
+        .eq('organizations_id', selectedOrg);
+
+      if (error) {
+        console.error('Error fetching articles:', error);
+        return;
+      }
+
+      if (articles) {
+        setPublicArticles(articles.filter(article => article.is_public));
+        setInternalArticles(articles.filter(article => !article.is_public));
+      }
+    };
+
+    fetchArticles();
+
+    // Set up real-time subscription
+    const subscription = supabase
+      .channel('articles_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'articles',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        async (payload) => {
+          console.log('Real-time update:', payload);
+          // Refetch all articles when there's any change
+          await fetchArticles();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [selectedOrg]);
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     navigate('/signin');
@@ -125,8 +213,73 @@ const KnowledgeBase = () => {
     setArticleData({
       ...articleData,
       title: `Untitled ${type} article`,
-      type
+      is_public: type === 'public',
+      created_by: currentUser?.id || '',
+      enabled_ai: false
     });
+  };
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    return date.toLocaleString();
+  };
+
+  // Update the handleCreateArticle function
+  const handleCreateArticle = async (publish: boolean = false) => {
+    if (!selectedOrg || !currentUser) return;
+
+    try {
+      const newArticle = {
+        organizations_id: selectedOrg,
+        title: articleData.title,
+        description: articleData.description,
+        content: articleData.content,
+        created_by: currentUser.id,
+        is_public: articleModalType === 'public',
+        is_published: publish,
+        created_at: new Date().toISOString(),
+        last_updated_at: new Date().toISOString(),
+        last_updated_by: currentUser.id,
+        enabled_ai: articleData.enabled_ai
+      };
+
+      const { data, error } = await supabase
+        .from('articles')
+        .insert([newArticle])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Close modal after successful creation
+      setArticleModalType(null);
+      
+      // Clear form
+      setArticleData({
+        id: '',
+        created_at: new Date().toISOString(),
+        organizations_id: selectedOrg,
+        title: '',
+        description: '',
+        content: '',
+        is_public: true,
+        is_published: false,
+        last_updated_at: null,
+        last_updated_by: null,
+        created_by: currentUser.id,
+        enabled_ai: false
+      });
+
+    } catch (error) {
+      console.error('Error creating article:', error);
+      alert('Failed to create article');
+    }
+  };
+
+  // Add handler for new content button
+  const handleNewContentClick = () => {
+    setIsNewContentModalOpen(true);
   };
 
   return (
@@ -254,36 +407,38 @@ const KnowledgeBase = () => {
       <div className="w-80 border-r border-[#8B4513] flex flex-col">
         <div className="p-4 border-b border-[#8B4513]">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-[#3C1810]">Knowledge Bar</h2>
+            <h2 className="text-xl font-semibold text-[#3C1810]">Knowledge Bar</h2>
             <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
               <IconPlus size={20} />
             </button>
           </div>
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Search articles..."
-              className="w-full pl-10 pr-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-            />
-            <IconSearch className="absolute left-3 top-2.5 text-[#8B4513]" size={20} />
-          </div>
         </div>
 
-        {/* Sources Section */}
-        <div className="p-4 border-b border-[#8B4513]">
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-medium text-[#3C1810]">Sources</span>
-            <IconChevronDown size={16} className="text-[#8B4513]" />
-          </div>
-          <div className="space-y-2">
-            <button className="w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3]">
-              All sources
+        {/* Navigation Links */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="space-y-2 p-4">
+            <button 
+              onClick={() => setSelectedSection('sources')}
+              className={`w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3] flex items-center gap-2 ${
+                selectedSection === 'sources' ? 'bg-[#F5E6D3]' : ''
+              }`}
+            >
+              Sources
             </button>
-            <button className="w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3]">
+            
+            <button 
+              onClick={() => setSelectedSection('content')}
+              className={`w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3] flex items-center gap-2 ${
+                selectedSection === 'content' ? 'bg-[#F5E6D3]' : ''
+              }`}
+            >
+              Content
+            </button>
+            
+            <button 
+              className="w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3] flex items-center gap-2"
+            >
               Help Center
-            </button>
-            <button className="w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3]">
-              AI Agent
             </button>
           </div>
         </div>
@@ -291,91 +446,277 @@ const KnowledgeBase = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-auto">
-        {/* Header with New Content button */}
-        <div className="p-6 border-b border-[#8B4513] flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-[#3C1810]">Sources</h1>
-          <button className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]">
-            <IconPlus size={20} />
-            New content
-          </button>
-        </div>
-
-        {/* Content Sections */}
-        <div className="p-6 space-y-8">
-          {/* Public Articles Section */}
-          <div className="space-y-4">
-            <div className="flex items-start gap-4">
-              <div className="p-2 bg-[#F5E6D3] rounded-lg">
-                <IconArticle size={24} className="text-[#8B4513]" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-[#3C1810]">Public articles</h2>
-                <p className="text-[#5C2E0E] text-sm">
-                  Let AI Agent use public articles from your Help Center.
-                </p>
+        {selectedSection === 'content' ? (
+          <div className="flex-1 overflow-auto">
+            {/* Header */}
+            <div className="p-6 border-b border-[#8B4513] flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-[#3C1810]">Content</h1>
+              <div className="flex gap-2">
+                <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
+                  Content reporting
+                </button>
+                <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
+                  New folder
+                </button>
+                <button 
+                  onClick={handleNewContentClick}
+                  className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
+                >
+                  <IconPlus size={20} />
+                  New content
+                </button>
               </div>
             </div>
 
-            {/* Public Articles List */}
-            <div className="ml-12 space-y-2">
-              <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
-                <div className="flex items-center gap-3">
-                  <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
-                  <div>
-                    <span className="text-[#3C1810] font-medium">Handle Bar</span>
-                    <span className="text-[#5C2E0E] text-sm ml-2">3 articles</span>
+            {/* Search and Filters */}
+            <div className="p-4 border-b border-[#8B4513] flex gap-4">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  placeholder="Search articles..."
+                  className="w-full pl-10 pr-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
+                />
+                <IconSearch className="absolute left-3 top-2.5 text-[#8B4513]" size={20} />
+                <button className="absolute right-3 top-2.5 text-[#8B4513] hover:text-[#5C2E0E]">
+                  <IconX size={20} />
+                </button>
+              </div>
+              <button className="flex items-center gap-2 px-4 py-2 border border-[#8B4513] rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
+                <IconArticle size={20} />
+                Type is Public article
+              </button>
+              <button className="px-4 py-2 border border-[#8B4513] rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
+                Filters
+              </button>
+            </div>
+
+            {/* Results Count */}
+            <div className="px-6 py-3 text-[#5C2E0E] flex items-center justify-between border-b border-[#8B4513]">
+              <div className="flex items-center gap-2">
+                <span>{publicArticles.length + internalArticles.length} results</span>
+                <span>in this folder and subfolders</span>
+              </div>
+              <button className="text-[#8B4513] hover:text-[#5C2E0E]">
+                Clear search
+              </button>
+            </div>
+
+            {/* Articles List */}
+            <div className="p-4">
+              <table className="w-full">
+                <thead className="border-b border-[#8B4513]">
+                  <tr>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Title</th>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Type</th>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">AI Agent</th>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Help Center</th>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Help Center collections</th>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Status</th>
+                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Last updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...publicArticles, ...internalArticles].map(article => (
+                    <tr key={article.id} className="hover:bg-[#F5E6D3] cursor-pointer">
+                      <td className="py-3 text-[#3C1810]">{article.title}</td>
+                      <td className="py-3 text-[#3C1810]">
+                        {article.is_public ? 'Public article' : 'Internal article'}
+                      </td>
+                      <td className="py-3">
+                        <IconCheck className="text-[#8B4513]" size={20} />
+                      </td>
+                      <td className="py-3">
+                        <IconCheck className="text-[#8B4513]" size={20} />
+                      </td>
+                      <td className="py-3 text-[#3C1810]">General</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-1 rounded-full text-sm ${
+                          article.is_published 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {article.is_published ? 'Published' : 'Draft'}
+                        </span>
+                      </td>
+                      <td className="py-3 text-[#8B6B4D] text-sm">
+                        {formatDate(article.last_updated_at || article.created_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="p-6 space-y-8">
+            {/* Header */}
+            <div className="p-6 border-b border-[#8B4513] flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-[#3C1810]">Sources</h1>
+              <button 
+                onClick={handleNewContentClick}
+                className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
+              >
+                <IconPlus size={20} />
+                New content
+              </button>
+            </div>
+
+            {/* Public Articles Section */}
+            <div className="space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-[#F5E6D3] rounded-lg">
+                  <IconArticle size={24} className="text-[#8B4513]" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-[#3C1810]">Public articles</h2>
+                  <p className="text-[#5C2E0E] text-sm">
+                    Let AI Agent use public articles from your Help Center.
+                  </p>
+                </div>
+              </div>
+
+              {/* Public Articles List - Only show header */}
+              <div className="ml-12 space-y-2">
+                <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
+                  <div className="flex items-center gap-3">
+                    <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
+                    <div>
+                      <span className="text-[#3C1810] font-medium">Handle Bar</span>
+                      <span className="text-[#5C2E0E] text-sm ml-2">{publicArticles.length} articles</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <IconCheck size={16} className="text-[#8B4513]" />
+                    <button 
+                      onClick={() => handleOpenModal('public')}
+                      className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
+                    >
+                      Add article
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <IconCheck size={16} className="text-[#8B4513]" />
-                  <button 
-                    onClick={() => handleOpenModal('public')}
-                    className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
-                  >
-                    Add article
-                  </button>
+              </div>
+            </div>
+
+            {/* Internal Articles Section */}
+            <div className="space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-[#F5E6D3] rounded-lg">
+                  <IconLock size={24} className="text-[#8B4513]" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-semibold text-[#3C1810]">Internal articles</h2>
+                  <p className="text-[#5C2E0E] text-sm">
+                    Give AI Agent internal knowledge only available to you and your team.
+                  </p>
+                </div>
+              </div>
+
+              {/* Internal Articles List */}
+              <div className="ml-12 space-y-2">
+                <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
+                  <div className="flex items-center gap-3">
+                    <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
+                    <div>
+                      <span className="text-[#3C1810] font-medium">Handle Bar</span>
+                      <span className="text-[#5C2E0E] text-sm ml-2">{internalArticles.length} articles</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <IconCheck size={16} className="text-[#8B4513]" />
+                    <button 
+                      onClick={() => handleOpenModal('internal')}
+                      className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
+                    >
+                      Add article
+                    </button>
+                  </div>
+                </div>
+
+                {/* Published Internal Articles List */}
+                <div className="mt-4 space-y-2">
+                  {internalArticles
+                    .filter(article => article.is_published)
+                    .map(article => (
+                      <div 
+                        key={article.id}
+                        className="p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3] hover:bg-[#F5E6D3] cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-[#3C1810] font-medium">{article.title}</h3>
+                            <p className="text-[#5C2E0E] text-sm mt-1">{article.description}</p>
+                          </div>
+                          <div className="text-[#8B6B4D] text-sm">
+                            {formatDate(article.last_updated_at || article.created_at)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                 </div>
               </div>
             </div>
           </div>
+        )}
 
-          {/* Internal Articles Section */}
-          <div className="space-y-4">
-            <div className="flex items-start gap-4">
-              <div className="p-2 bg-[#F5E6D3] rounded-lg">
-                <IconLock size={24} className="text-[#8B4513]" />
+        {/* New Content Modal */}
+        {isNewContentModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-[#FDF6E3] w-[480px] rounded-lg shadow-lg">
+              {/* Modal Header */}
+              <div className="p-6 border-b border-[#8B4513]">
+                <h2 className="text-xl font-semibold text-[#3C1810]">Create new content</h2>
               </div>
-              <div>
-                <h2 className="text-lg font-semibold text-[#3C1810]">Internal articles</h2>
-                <p className="text-[#5C2E0E] text-sm">
-                  Give AI Agent internal knowledge only available to you and your team.
-                </p>
-              </div>
-            </div>
 
-            {/* Internal Articles List */}
-            <div className="ml-12 space-y-2">
-              <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
-                <div className="flex items-center gap-3">
-                  <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
-                  <div>
-                    <span className="text-[#3C1810] font-medium">Handle Bar</span>
-                    <span className="text-[#5C2E0E] text-sm ml-2">1 article</span>
+              {/* Modal Content */}
+              <div className="p-6 space-y-4">
+                {/* Public Article Option */}
+                <button 
+                  onClick={() => {
+                    setIsNewContentModalOpen(false);
+                    handleOpenModal('public');
+                  }}
+                  className="w-full p-4 border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3] flex items-start gap-4"
+                >
+                  <div className="p-2 bg-[#F5E6D3] rounded-lg">
+                    <IconArticle size={24} className="text-[#8B4513]" />
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <IconCheck size={16} className="text-[#8B4513]" />
-                  <button 
-                    onClick={() => handleOpenModal('internal')}
-                    className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
-                  >
-                    Add article
-                  </button>
-                </div>
+                  <div className="flex-1 text-left">
+                    <h3 className="text-lg font-medium text-[#3C1810]">Public article</h3>
+                    <p className="text-sm text-[#5C2E0E]">Create an article that will be visible in your Help Center.</p>
+                  </div>
+                </button>
+
+                {/* Internal Article Option */}
+                <button 
+                  onClick={() => {
+                    setIsNewContentModalOpen(false);
+                    handleOpenModal('internal');
+                  }}
+                  className="w-full p-4 border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3] flex items-start gap-4"
+                >
+                  <div className="p-2 bg-[#F5E6D3] rounded-lg">
+                    <IconLock size={24} className="text-[#8B4513]" />
+                  </div>
+                  <div className="flex-1 text-left">
+                    <h3 className="text-lg font-medium text-[#3C1810]">Internal article</h3>
+                    <p className="text-sm text-[#5C2E0E]">Create an article that will only be visible to your team.</p>
+                  </div>
+                </button>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-6 border-t border-[#8B4513] flex justify-end">
+                <button 
+                  onClick={() => setIsNewContentModalOpen(false)}
+                  className="px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Article Creation Modal */}
@@ -394,10 +735,16 @@ const KnowledgeBase = () => {
                 >
                   Cancel
                 </button>
-                <button className="px-3 py-1 text-[#3C1810] hover:bg-[#F5E6D3] rounded">
+                <button 
+                  onClick={() => handleCreateArticle(false)}
+                  className="px-3 py-1 text-[#3C1810] hover:bg-[#F5E6D3] rounded"
+                >
                   Save as draft
                 </button>
-                <button className="px-3 py-1 bg-[#8B4513] text-[#FDF6E3] hover:bg-[#5C2E0E] rounded">
+                <button 
+                  onClick={() => handleCreateArticle(true)}
+                  className="px-3 py-1 bg-[#8B4513] text-[#FDF6E3] hover:bg-[#5C2E0E] rounded"
+                >
                   Publish
                 </button>
                 <button className="p-2 hover:bg-[#F5E6D3] rounded">
@@ -439,44 +786,93 @@ const KnowledgeBase = () => {
               </div>
 
               {/* Details Sidebar */}
-              <div className="w-80 p-6">
-                <h3 className="text-lg font-semibold text-[#3C1810] mb-4">Details</h3>
-                <div className="space-y-4">
+              <div className="w-80 p-6 flex flex-col h-full">
+                <h3 className="text-base font-semibold text-[#3C1810] mb-4">Details</h3>
+                {/* Make the content area scrollable */}
+                <div className="space-y-4 overflow-y-auto flex-1">
+                  {/* Data Section - Reduce font sizes */}
+                  <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
                   <div>
-                    <label className="text-sm text-[#5C2E0E] block mb-1">Type</label>
-                    <div className="flex items-center gap-2 text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
-                      {articleModalType === 'public' ? (
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
+                    <div className="flex items-center gap-2 text-2xl text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                      {articleData.is_public ? (
                         <>
-                          <IconArticle size={16} />
+                          <IconArticle size={20} />
                           <span>Public article</span>
                         </>
                       ) : (
                         <>
-                          <IconLock size={16} />
+                          <IconLock size={20} />
                           <span>Internal article</span>
                         </>
                       )}
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm text-[#5C2E0E] block mb-1">Status</label>
-                    <div className="text-[#3C1810]">Draft</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Status</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.is_published ? 'Published' : 'Draft'}
+                    </div>
                   </div>
                   <div>
-                    <label className="text-sm text-[#5C2E0E] block mb-1">Article ID</label>
-                    <div className="text-[#3C1810]">{Math.floor(Math.random() * 10000000)}</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Article ID</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.id || 'Not yet created'}
+                    </div>
                   </div>
                   <div>
-                    <label className="text-sm text-[#5C2E0E] block mb-1">Language</label>
-                    <div className="text-[#3C1810]">English</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Language</label>
+                    <div className="text-sm text-[#3C1810]">English</div>
                   </div>
                   <div>
-                    <label className="text-sm text-[#5C2E0E] block mb-1">Created</label>
-                    <div className="text-[#3C1810]">A few seconds ago</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Created</label>
+                    <div className="text-sm text-[#3C1810]">{formatDate(articleData.created_at)}</div>
                   </div>
                   <div>
-                    <label className="text-sm text-[#5C2E0E] block mb-1">Created by</label>
-                    <div className="text-[#3C1810]">{users.find(u => u.id === currentUser?.id)?.display_name}</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Created by</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {users.find(u => u.id === articleData.created_by)?.display_name || 'Unknown'}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Last updated</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.last_updated_at ? formatDate(articleData.last_updated_at) : ''}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Last updated by</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.last_updated_by ? 
+                        users.find(u => u.id === articleData.last_updated_by)?.display_name : ''}
+                    </div>
+                  </div>
+
+                  {/* AI Section - Update the layout */}
+                  <div>
+                    <div className="pt-4 border-t border-[#8B4513]"></div>
+                    <div className="text-xs font-medium text-[#5C2E0E] mb-2">AI</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">AI Agent</label>
+                    <div className="space-y-2">
+                      <div className="text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                        When enabled, AI agent will use this content to generate AI answers.
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-[#3C1810]">Disabled</span>
+                        <button 
+                          onClick={() => setArticleData(prev => ({ ...prev, enabled_ai: !prev.enabled_ai }))}
+                          className={`w-10 h-5 rounded-full relative transition-colors duration-200 ease-in-out ${
+                            articleData.enabled_ai ? 'bg-[#8B4513]' : 'bg-[#D4B69C]'
+                          }`}
+                        >
+                          <div 
+                            className={`w-4 h-4 rounded-full bg-[#FDF6E3] absolute top-0.5 transition-transform duration-200 ease-in-out ${
+                              articleData.enabled_ai ? 'translate-x-5' : 'translate-x-0.5'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

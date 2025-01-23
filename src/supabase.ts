@@ -25,19 +25,9 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   }
 });
 
-// Verify client initialization
-console.log('Supabase client initialized:', !!supabase);
-
-// Add auth state change listener
-supabase.auth.onAuthStateChange((event, session) => {
-  console.log('Auth state changed:', event);
-  console.log('Session:', session);
-});
-
 // Add immediate session check
 (async () => {
   const { data: { session }, error } = await supabase.auth.getSession();
-  console.log('Current session:', session);
   if (error) console.error('Session check error:', error);
 })();
 

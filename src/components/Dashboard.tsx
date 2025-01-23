@@ -3,7 +3,6 @@ import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
 import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
 import IconBrandSlack from '@tabler/icons-react/dist/esm/icons/IconBrandSlack';
 import IconMail from '@tabler/icons-react/dist/esm/icons/IconMail';
-import IconLogout from '@tabler/icons-react/dist/esm/icons/IconLogout';
 import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
 import IconChartBar from '@tabler/icons-react/dist/esm/icons/IconChartBar';
 import IconSend from '@tabler/icons-react/dist/esm/icons/IconSend';
@@ -584,31 +583,72 @@ const Dashboard = () => {
 
   // Add useEffect to count new conversations
   useEffect(() => {
-    const newCount = conversations.filter(conv => conv.status === 'New').length;
+    const newCount = conversations.filter(conv => conv.status === 'New' || conv.status === 'Active').length;
     setNewConversationsCount(newCount);
   }, [conversations]);
 
-  // Add real-time subscription for conversation changes
+  // Add useEffect for real-time conversation updates
   useEffect(() => {
     if (!selectedOrg) return;
 
+    // Initial fetch of conversations is already handled
+
+    // Set up real-time subscription for conversation changes
     const channel = supabase
-      .channel('conversation-changes')
+      .channel('conversations_changes')
       .on(
         'postgres_changes',
         {
-          event: '*', // Listen to all events (INSERT, UPDATE, DELETE)
+          event: '*',
           schema: 'public',
           table: 'conversations',
           filter: `organizations_id=eq.${selectedOrg}`
         },
-        (payload) => {
-          // Fetch updated conversations to maintain accurate count
-          fetchConversations();
+        async (payload) => {
+          // Fetch updated conversation data
+          const { data: updatedConversation } = await supabase
+            .from('conversations')
+            .select(`
+              *,
+              customers!conversations_customer_id_fkey (
+                id,
+                full_name,
+                email
+              ),
+              messages!messages_conversations_id_fkey (
+                id,
+                content,
+                sender_id,
+                sender_type,
+                created_at,
+                conversations_id
+              )
+            `)
+            .eq('id', payload.new.id)
+            .single();
+
+          if (updatedConversation) {
+            setConversations(prevConversations => {
+              const index = prevConversations.findIndex(c => c.id === payload.new.id);
+              if (index >= 0) {
+                // Update existing conversation
+                const newConversations = [...prevConversations];
+                newConversations[index] = {
+                  ...newConversations[index],
+                  ...updatedConversation
+                };
+                return newConversations;
+              } else {
+                // Add new conversation
+                return [...prevConversations, updatedConversation];
+              }
+            });
+          }
         }
       )
       .subscribe();
 
+    // Cleanup subscription
     return () => {
       channel.unsubscribe();
     };
@@ -787,71 +827,24 @@ const Dashboard = () => {
 
   // Update the handleAssign function to ensure UI updates
   const handleAssign = async (userId: string | null) => {
-    if (!selectedApp) {
-      console.log('No conversation selected');
-      return;
-    }
+    if (!selectedApp) return;
 
     try {
-      console.log('Attempting assignment:', {
-        userId,
-        conversationId: selectedApp,
-        currentUserRole
-      });
-      
-      // Create update object based on whether we're assigning or unassigning
-      const updates = {
-        assigned_to: userId === null ? null : userId
-      };
-      
       const { error } = await supabase
         .from('conversations')
-        .update(updates)
+        .update({ 
+          assigned_to: userId,
+          is_assigned: userId !== null  // Set is_assigned based on whether there's an assignee
+        })
         .eq('id', selectedApp);
 
-      if (error) {
-        console.error('Assignment error:', error);
-        throw error;
-      }
+      if (error) throw error;
 
-      console.log('Assignment successful');
+      // Close the dropdown after successful assignment
       setIsAssigneeOpen(false);
-      
-      // Fetch fresh data
-      const { data: updatedConversation, error: fetchError } = await supabase
-        .from('conversations')
-        .select(`
-          *,
-          customers!conversations_customer_id_fkey (
-            id,
-            full_name,
-            email
-          ),
-          messages!messages_conversations_id_fkey (
-            id,
-            content,
-            sender_id,
-            sender_type,
-            created_at,
-            conversations_id
-          )
-        `)
-        .eq('id', selectedApp)
-        .single();
-
-      if (fetchError) throw fetchError;
-
-      // Update the conversations list with the new data
-      setConversations(prevConversations => 
-        prevConversations.map(conv => 
-          conv.id === selectedApp 
-            ? { ...conv, ...updatedConversation }
-            : conv
-        )
-      );
-
     } catch (error) {
       console.error('Error assigning conversation:', error);
+      alert('Failed to assign conversation');
     }
   };
 
@@ -893,18 +886,16 @@ const Dashboard = () => {
         {/* Rest of the sidebar navigation */}
         <nav className="flex flex-col space-y-4 flex-1">
           <button
-            onClick={() => setSelectedNav('inbox')}
-            className={`relative p-3 rounded-lg ${
-              selectedNav === 'inbox'
-                ? 'bg-[#F5E6D3] text-[#3C1810]'
-                : 'text-[#5C2E0E] hover:bg-[#F5E6D3]'
+            onClick={() => handleNavigation('inbox')}
+            className={`p-2 rounded-lg relative ${
+              selectedNav === 'inbox' ? 'text-[#8B4513] bg-[#F5E6D3]' : 'text-[#3C1810] hover:bg-[#F5E6D3]'
             }`}
           >
-            <IconInbox size={24} />
+            <IconInbox size={20} />
             {newConversationsCount > 0 && (
-              <div className="absolute -top-1 -right-1 bg-[#8B4513] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+              <span className="absolute -top-1 -right-1 bg-[#8B4513] text-[#FDF6E3] text-xs w-4 h-4 flex items-center justify-center rounded-full">
                 {newConversationsCount}
-              </div>
+              </span>
             )}
           </button>
           
@@ -1028,45 +1019,118 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Secondary Sidebar */}
-      <div className="w-80 border-r border-[#8B4513] flex flex-col">
+      {/* New Secondary Navigation */}
+      <div className="w-64 border-r border-[#8B4513] flex flex-col">
         {/* Header */}
-        <div className="p-4 border-b border-[#8B4513]">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center space-x-3">
-              {selectedOrg && organizations.find(org => org.id === selectedOrg) && (
-                <div className="w-8 h-8 rounded overflow-hidden">
-                  {organizations.find(org => org.id === selectedOrg)?.logoUrl ? (
-                    <img 
-                      src={organizations.find(org => org.id === selectedOrg)?.logoUrl} 
-                      alt="Organization Logo" 
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-8 h-8 bg-[#8B4513] flex items-center justify-center text-[#FDF6E3] rounded">
-                      <span className="text-sm font-semibold">
-                        {organizations.find(org => org.id === selectedOrg)?.name.charAt(0)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
+        <div className="p-6 border-b border-[#8B4513]">
+          <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-[#3C1810]">Inbox</h2>
-            </div>
-            <button 
-              onClick={createNewConversation}
-              className="text-[#3C1810] hover:bg-[#F5E6D3] p-1 rounded"
-            >
+            <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
               <IconPlus size={20} />
             </button>
           </div>
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Search..."
-              className="w-full px-4 py-2 pl-10 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-            />
-            <IconSearch className="absolute left-3 top-2.5 text-[#3C1810]" size={20} />
+        </div>
+
+        {/* Navigation Items */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="p-4 space-y-1">
+            {/* Your inbox */}
+            <div className="mb-4">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <IconInbox size={20} className="text-[#8B4513]" />
+                <span className="text-sm font-medium text-[#3C1810]">Inbox</span>
+                {newConversationsCount > 0 && (
+                  <span className="ml-auto bg-[#8B4513] text-[#FDF6E3] text-xs px-2 py-0.5 rounded-full">
+                    {conversations.filter(conv => 
+                      conv.status === 'New' || conv.status === 'Active'
+                    ).length}
+                  </span>
+                )}
+              </div>
+              <div className="pl-9">
+                <button className="w-full text-left px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded flex items-center justify-between">
+                  <span>Mentions</span>
+                  <span className="text-xs text-[#5C2E0E]">0</span>
+                </button>
+                <button className="w-full text-left px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded flex items-center justify-between">
+                  <span>Created by you</span>
+                  <span className="text-xs text-[#5C2E0E]">
+                    {conversations.filter(conv => 
+                      conv.assigned_to === currentUser?.id && 
+                      (conv.status === 'New' || conv.status === 'Active')
+                    ).length}
+                  </span>
+                </button>
+                <button className="w-full text-left px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded flex items-center justify-between">
+                  <span>Unassigned</span>
+                  <span className="text-xs text-[#5C2E0E]">
+                    {conversations.filter(conv => 
+                      !conv.is_assigned && 
+                      (conv.status === 'New' || conv.status === 'Active')
+                    ).length}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Fin AI Agent */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <IconRobot size={20} className="text-[#8B4513]" />
+                  <span className="text-sm font-medium text-[#3C1810]">AI Agent</span>
+                </div>
+                <button className="p-1 rounded hover:bg-[#F5E6D3]">
+                  <IconPlus size={16} className="text-[#8B4513]" />
+                </button>
+              </div>
+            </div>
+
+            {/* Teammates */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <IconUser size={20} className="text-[#8B4513]" />
+                  <span className="text-sm font-medium text-[#3C1810]">Teammates</span>
+                </div>
+                <button className="p-1 rounded hover:bg-[#F5E6D3]">
+                  <IconPlus size={16} className="text-[#8B4513]" />
+                </button>
+              </div>
+            </div>
+
+            {/* Team inboxes */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <IconInbox size={20} className="text-[#8B4513]" />
+                  <span className="text-sm font-medium text-[#3C1810]">Team inboxes</span>
+                </div>
+                <button className="p-1 rounded hover:bg-[#F5E6D3]">
+                  <IconPlus size={16} className="text-[#8B4513]" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Current Secondary Sidebar (now third) */}
+      <div className="w-80 border-r border-[#8B4513] flex flex-col">
+        {/* Header */}
+        <div className="p-6 border-b border-[#8B4513]">
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <h2 className="text-xl font-semibold text-[#3C1810]">
+                {organizations.find(org => org.id === selectedOrg)?.name || 'Loading...'}
+              </h2>
+            </div>
+            <button 
+              onClick={createNewConversation}
+              className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]"
+            >
+              <IconPlus size={20} />
+            </button>
           </div>
         </div>
 
@@ -1148,33 +1212,28 @@ const Dashboard = () => {
       {/* Main Content */}
       <div className="flex-1 flex">
         {/* Chat Area */}
-      <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col">
           {/* Chat Header */}
-          <div className="p-4 border-b border-[#8B4513] flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-              <div className="flex flex-col">
-            <h2 className="text-lg font-semibold text-[#3C1810]">
-                  {getCurrentConversation()?.channels || 'New Chat'}
-            </h2>
-                <span className="text-sm text-[#5C2E0E]">
-                  {getCurrentConversation()?.status || ''}
-                </span>
-          </div>
+          <div className="p-6 border-b border-[#8B4513]">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-[#3C1810]">
+                {getCurrentConversation()?.channels || 'New Chat'}
+              </h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCloseConversation}
+                  className="px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg"
+                >
+                  Close Chat
+                </button>
+                <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
+                  <IconDotsVertical size={20} />
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleCloseConversation}
-                className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded"
-              >
-                Close Chat
-            </button>
-              <button className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded">
-              <IconDotsVertical size={20} />
-            </button>
           </div>
-        </div>
 
-        {/* Messages */}
+          {/* Messages */}
           <div className="flex-1 p-6 overflow-y-auto bg-[#FDF6E3]">
           {messages.length === 0 ? (
               <div className="bg-[#F5E6D3] rounded-lg border border-[#8B4513] p-6 max-w-2xl mx-auto">
@@ -1184,8 +1243,7 @@ const Dashboard = () => {
                 </div>
               </div>
               <p className="text-[#3C1810] mb-4">
-                This is a demo message. It shows how a customer conversation from WhatsApp, 
-                Instagram or Facebook will look in your Inbox.
+                Choose a conversation to start helping your customer.
               </p>
               <p className="text-[#5C2E0E] text-sm">
                 Once a channel is set up, all conversations come straight to your Inbox, 
