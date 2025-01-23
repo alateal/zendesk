@@ -257,10 +257,8 @@ const Dashboard = () => {
         }
         
         if (orgs && orgs.length > 0) {
-          console.log('Setting organizations:', orgs);
           setOrganizations(orgs);
           if (!selectedOrg) {
-            console.log('Setting selected org:', orgs[0].id);
             setSelectedOrg(orgs[0].id);
           }
         }
@@ -288,8 +286,6 @@ const Dashboard = () => {
   // Update the fetchConversations function to filter based on role and assignment
   const fetchConversations = async () => {
     try {
-      console.log('Fetching conversations for org:', selectedOrg);
-      
       // Get current user
       const currentUser = await getCurrentUser();
       if (!currentUser) return;
@@ -913,6 +909,17 @@ const Dashboard = () => {
           </button>
           
           <button
+            onClick={() => navigate('/knowledge')}
+            className={`p-2 rounded-lg ${
+              selectedNav === 'knowledge'
+                ? 'bg-[#8B4513] text-[#FDF6E3]'
+                : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+            }`}
+          >
+            <IconBook size={24} />
+          </button>
+
+          <button
             onClick={() => setSelectedNav('ai')}
             className={`p-2 rounded-lg ${
               selectedNav === 'ai'
@@ -921,17 +928,6 @@ const Dashboard = () => {
             }`}
           >
             <IconRobot size={24} />
-          </button>
-
-          <button
-            onClick={() => setSelectedNav('knowledge')}
-            className={`p-2 rounded-lg ${
-              selectedNav === 'knowledge'
-                ? 'bg-[#8B4513] text-[#FDF6E3]'
-                : 'text-[#3C1810] hover:bg-[#F5E6D3]'
-            }`}
-          >
-            <IconBook size={24} />
           </button>
 
           <button
