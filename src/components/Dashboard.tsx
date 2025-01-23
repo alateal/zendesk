@@ -15,6 +15,7 @@ import IconStarFilled from '@tabler/icons-react/dist/esm/icons/IconStarFilled';
 import IconStar from '@tabler/icons-react/dist/esm/icons/IconStar';
 import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
 import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
+import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 
@@ -101,6 +102,8 @@ const Dashboard = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [isAssigneeOpen, setIsAssigneeOpen] = useState(false);
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const profileDropdownRef = useRef<HTMLDivElement>(null);
 
   // Add ref for the dropdown container
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -271,11 +274,28 @@ const Dashboard = () => {
     fetchOrganizations();
   }, []);
 
+  // Add getCurrentUser function near the top
+  const getCurrentUser = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      return user;
+    } catch (error) {
+      console.error('Error getting current user:', error);
+      return null;
+    }
+  };
+
+  // Update the fetchConversations function to filter based on role and assignment
   const fetchConversations = async () => {
     try {
       console.log('Fetching conversations for org:', selectedOrg);
       
-      const { data: conversationsData, error: conversationsError } = await supabase
+      // Get current user
+      const currentUser = await getCurrentUser();
+      if (!currentUser) return;
+
+      // Build the query
+      let query = supabase
         .from('conversations')
         .select(`
           id,
@@ -305,10 +325,17 @@ const Dashboard = () => {
         .order('is_important', { ascending: false })
         .order('created_at', { ascending: false });
 
+      // If user is not admin, only show assigned conversations
+      if (currentUserRole !== '5015a883-2f23-4bec-ac3d-9cfca8ecd824') {
+        query = query.eq('assigned_to', currentUser.id);
+      }
+
+      const { data: conversationsData, error: conversationsError } = await query;
+
       if (conversationsError) throw conversationsError;
 
       if (conversationsData && conversationsData.length > 0) {
-        console.log('Fetched conversations with assignments:', conversationsData);
+        console.log('Fetched conversations:', conversationsData);
         const conversationsWithMessages = conversationsData.map(conv => {
           const messages = conv.messages || [];
           const sortedMessages = messages.sort((a, b) => 
@@ -325,6 +352,8 @@ const Dashboard = () => {
         });
 
         setConversations(conversationsWithMessages);
+      } else {
+        setConversations([]);
       }
     } catch (error) {
       console.error('Error fetching conversations:', error);
@@ -339,18 +368,17 @@ const Dashboard = () => {
 
     fetchConversations();
 
-    // Set up real-time subscription without filters
+    // Set up real-time subscription
     const channel = supabase.channel(`org-${selectedOrg}`)
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', // Listen to all events
           schema: 'public',
           table: 'conversations'
         },
         (payload) => {
-          console.log('Conversation inserted:', payload);
-          // Check organization ID in the handler instead of filter
+          console.log('Conversation changed:', payload);
           if (payload.new && payload.new.organizations_id === selectedOrg) {
             fetchConversations();
           }
@@ -365,7 +393,6 @@ const Dashboard = () => {
         },
         (payload) => {
           console.log('Message inserted:', payload);
-          // Check organization ID in the handler instead of filter
           if (payload.new && payload.new.organizations_id === selectedOrg) {
             fetchConversations();
           }
@@ -373,25 +400,12 @@ const Dashboard = () => {
       );
 
     // Subscribe and handle connection status
-    channel.subscribe(async (status) => {
-      console.log('Subscription status:', status);
-      if (status === 'SUBSCRIBED') {
-        console.log('Successfully subscribed to changes');
-      }
-      if (status === 'CHANNEL_ERROR') {
-        console.error('Channel error occurred');
-        // Try to reconnect
-        await channel.unsubscribe();
-        channel.subscribe();
-      }
-    });
+    channel.subscribe();
 
-    // Cleanup
     return () => {
-      console.log('Cleaning up subscription');
       channel.unsubscribe();
     };
-  }, [selectedOrg]);
+  }, [selectedOrg, currentUserRole]); // Add currentUserRole to dependencies
 
   // Add this function
   const refreshSession = async () => {
@@ -707,11 +721,28 @@ const Dashboard = () => {
     }
   };
 
-  // Update the fetchUsers function to include better error handling
+  // Update the useEffect for fetching users
+  useEffect(() => {
+    if (selectedOrg) {
+      console.log('Fetching users for organization:', selectedOrg);
+      fetchUsers();
+    }
+  }, [selectedOrg]); // Fetch users when organization changes
+
+  // Remove the users fetch from handleAssigneeClick
+  const handleAssigneeClick = () => {
+    console.log('Dropdown clicked. Current state:', {
+      isAssigneeOpen: isAssigneeOpen,
+      selectedOrg: selectedOrg,
+      currentUserRole: currentUserRole
+    });
+    
+    setIsAssigneeOpen(!isAssigneeOpen);
+  };
+
+  // Update the fetchUsers function
   const fetchUsers = async () => {
     try {
-      console.log('Starting fetchUsers. Organization:', selectedOrg);
-      
       const { data, error } = await supabase
         .from('users')
         .select('id, display_name, email, role_id')
@@ -722,34 +753,11 @@ const Dashboard = () => {
         throw error;
       }
 
-      console.log('Fetched users:', data);
       if (data) {
         setUsers(data);
       }
     } catch (error) {
       console.error('Error in fetchUsers:', error);
-    }
-  };
-
-  // Update the useEffect to fetch users when org is selected and when dropdown opens
-  useEffect(() => {
-    if (selectedOrg && isAssigneeOpen) {
-      fetchUsers();
-    }
-  }, [selectedOrg, isAssigneeOpen]);
-
-  // Update the handleAssigneeClick function with logging
-  const handleAssigneeClick = () => {
-    console.log('Dropdown clicked. Current state:', {
-      isAssigneeOpen: isAssigneeOpen,
-      selectedOrg: selectedOrg,
-      currentUserRole: currentUserRole
-    });
-    
-    setIsAssigneeOpen(!isAssigneeOpen);
-    if (!isAssigneeOpen && selectedOrg) {
-      console.log('Fetching users...');
-      fetchUsers();
     }
   };
 
@@ -851,6 +859,32 @@ const Dashboard = () => {
     }
   };
 
+  // Add useEffect for profile dropdown click outside handler
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profileDropdownRef.current && !profileDropdownRef.current.contains(event.target as Node)) {
+        setIsProfileOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Update the profile dropdown to handle async user data
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // Add useEffect to fetch current user when component mounts
+  useEffect(() => {
+    const fetchCurrentUser = async () => {
+      const user = await getCurrentUser();
+      setCurrentUser(user);
+    };
+    fetchCurrentUser();
+  }, []);
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
@@ -924,12 +958,77 @@ const Dashboard = () => {
             <IconSettings size={24} />
           </button>
           
+          {/* Profile Button and Dropdown */}
+          <div className="relative" ref={profileDropdownRef}>
           <button
-            onClick={handleSignOut}
+              onClick={() => setIsProfileOpen(!isProfileOpen)}
             className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]"
           >
-            <IconLogout size={24} />
+              <IconUser size={24} />
           </button>
+
+            {/* Profile Dropdown - Updated positioning */}
+            {isProfileOpen && (
+              <div className="fixed bottom-3 left-16 w-64 bg-white border border-[#8B4513] rounded-lg shadow-lg z-20">
+                {/* User Profile Section */}
+                <div className="p-4 border-b border-[#8B4513]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-[#F5E6D3] flex items-center justify-center">
+                      <IconUser size={24} className="text-[#8B4513]" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-[#3C1810]">
+                        {users.find(u => u.id === currentUser?.id)?.display_name || 'Loading...'}
+                      </div>
+                      <div className="text-sm text-[#5C2E0E]">
+                        {currentUserRole === '5015a883-2f23-4bec-ac3d-9cfca8ecd824' ? 'Admin' : 'Agent'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Away Mode Toggle */}
+                <div className="px-4 py-3 border-b border-[#8B4513] flex items-center justify-between">
+                  <span className="text-[#3C1810]">Away mode</span>
+                  <button className="w-12 h-6 rounded-full bg-gray-200 relative">
+                    <div className="w-5 h-5 rounded-full bg-white absolute left-0.5 top-0.5 shadow"></div>
+                  </button>
+                </div>
+
+                {/* Settings Links */}
+                <div className="py-2">
+                  <button className="w-full px-4 py-2 text-left text-[#3C1810] hover:bg-[#F5E6D3] flex items-center justify-between">
+                    <span>Theme</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#5C2E0E]">Match system</span>
+                    </div>
+                  </button>
+                  <button className="w-full px-4 py-2 text-left text-[#3C1810] hover:bg-[#F5E6D3] flex items-center justify-between">
+                    <span>Language</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#5C2E0E]">English (US)</span>
+                    </div>
+                  </button>
+                  <button className="w-full px-4 py-2 text-left text-[#3C1810] hover:bg-[#F5E6D3] flex items-center justify-between">
+                    <span>Workspace</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#5C2E0E]">Handle Bar</span>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Sign Out Button */}
+                <div className="py-2 border-t border-[#8B4513]">
+                  <button
+                    onClick={handleSignOut}
+                    className="w-full px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] text-left"
+                  >
+                    Log out
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1006,7 +1105,7 @@ const Dashboard = () => {
                   }`}>
                     {conversation.status}
                   </span>
-                </div>
+              </div>
 
                 {/* Conversation Content */}
                 <div className="flex-1 pr-8">
@@ -1021,7 +1120,7 @@ const Dashboard = () => {
                           minute: '2-digit'
                         })}
                       </span>
-                    </div>
+                </div>
               </div>
                   {latestCustomerMessage && (
                     <p className="text-sm text-[#5C2E0E] truncate">
@@ -1043,7 +1142,7 @@ const Dashboard = () => {
                   ) : (
                     <IconStar size={20} className="text-[#8B4513]" />
                   )}
-                </button>
+            </button>
               </div>
             );
           })}
@@ -1058,13 +1157,13 @@ const Dashboard = () => {
           <div className="p-4 border-b border-[#8B4513] flex items-center justify-between">
           <div className="flex items-center space-x-4">
               <div className="flex flex-col">
-                <h2 className="text-lg font-semibold text-[#3C1810]">
+            <h2 className="text-lg font-semibold text-[#3C1810]">
                   {getCurrentConversation()?.channels || 'New Chat'}
-                </h2>
+            </h2>
                 <span className="text-sm text-[#5C2E0E]">
                   {getCurrentConversation()?.status || ''}
                 </span>
-              </div>
+          </div>
             </div>
             <div className="flex gap-2">
               <button
@@ -1172,10 +1271,10 @@ const Dashboard = () => {
             >
               <IconSend size={20} />
               <span>Send</span>
-              </button>
-            </div>
+            </button>
           </div>
         </div>
+      </div>
 
         {/* Insights Sidebar */}
         <div className="w-80 border-l border-[#8B4513] bg-[#FDF6E3] p-4">
@@ -1213,13 +1312,6 @@ const Dashboard = () => {
               {isAssigneeOpen && (
                 <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-[#8B4513] rounded-lg shadow-lg z-10">
                   <div className="p-2">
-                    <div className="text-sm text-[#5C2E0E] mb-2 px-4">
-                      Debug Info:
-                      <br />
-                      Role: {currentUserRole}
-                      <br />
-                      Expected: 5015a883-2f23-4bec-ac3d-9cfca8ecd824
-                    </div>
                     {users.map((user) => (
                       <button
                         key={user.id}
