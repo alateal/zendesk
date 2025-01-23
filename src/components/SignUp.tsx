@@ -3,35 +3,38 @@ import { Link, useNavigate } from 'react-router-dom'
 import supabase from '../supabase'
 
 const SignUp = () => {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const [formData, setFormData] = useState({
+    email: '',
+    password: '',
+    displayName: ''
+  })
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
-
+    setLoading(true)
     try {
-      setError(null)
-      setLoading(true)
-      
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
         options: {
-          emailRedirectTo: window.location.origin + '/signin'
+          data: {
+            display_name: formData.displayName
+          }
         }
       })
 
-      if (error) throw error
+      if (authError) throw authError
 
-      if (data.user) {
-        // Successful sign up
-        navigate('/signin')
+      if (authData.user) {
+        navigate('/dashboard')
       }
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'An error occurred during sign up')
+    } catch (err) {
+      const error = err as Error
+      console.error('Error signing up:', error)
+      setError(error.message)
     } finally {
       setLoading(false)
     }
@@ -43,12 +46,6 @@ const SignUp = () => {
         <h2 className="mt-6 text-center text-3xl font-bold text-[#3C1810]">
           Create your account
         </h2>
-        <p className="mt-2 text-center text-sm text-[#5C2E0E]">
-          Already have an account?{' '}
-          <Link to="/signin" className="font-medium text-[#8B4513] hover:text-[#5C2E0E]">
-            Sign in here
-          </Link>
-        </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -59,7 +56,25 @@ const SignUp = () => {
             </div>
           )}
           
-          <form className="space-y-6" onSubmit={handleSubmit}>
+          <form className="space-y-6" onSubmit={handleSignUp}>
+            <div>
+              <label htmlFor="displayName" className="block text-sm font-medium text-[#3C1810]">
+                Display Name
+              </label>
+              <div className="mt-1">
+                <input
+                  id="displayName"
+                  name="displayName"
+                  type="text"
+                  required
+                  className="appearance-none block w-full px-3 py-2 border border-[#8B4513] rounded-md shadow-sm placeholder-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
+                  value={formData.displayName}
+                  onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-[#3C1810]">
                 Email address
@@ -72,8 +87,8 @@ const SignUp = () => {
                   autoComplete="email"
                   required
                   className="appearance-none block w-full px-3 py-2 border border-[#8B4513] rounded-md shadow-sm placeholder-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   disabled={loading}
                 />
               </div>
@@ -91,8 +106,8 @@ const SignUp = () => {
                   autoComplete="new-password"
                   required
                   className="appearance-none block w-full px-3 py-2 border border-[#8B4513] rounded-md shadow-sm placeholder-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                   disabled={loading}
                 />
               </div>
@@ -104,22 +119,29 @@ const SignUp = () => {
                 className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-[#FDF6E3] bg-[#8B4513] hover:bg-[#5C2E0E] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#8B4513] disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={loading}
               >
-                {loading ? 'Creating account...' : 'Create account'}
+                {loading ? 'Creating account...' : 'Sign up'}
               </button>
             </div>
           </form>
 
           <div className="mt-6">
-            <p className="text-center text-xs text-[#5C2E0E]">
-              By signing up, you agree to our{' '}
-              <a href="#" className="font-medium text-[#8B4513] hover:text-[#5C2E0E]">
-                Terms of Service
-              </a>{' '}
-              and{' '}
-              <a href="#" className="font-medium text-[#8B4513] hover:text-[#5C2E0E]">
-                Privacy Policy
-              </a>
-            </p>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-[#8B4513]" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-2 bg-[#FDF6E3] text-[#5C2E0E]">Or</span>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <Link
+                to="/signin"
+                className="w-full flex justify-center py-2 px-4 border border-[#8B4513] rounded-md shadow-sm text-sm font-medium text-[#8B4513] bg-[#FDF6E3] hover:bg-[#F5E6D3]"
+              >
+                Already have an account? Sign in
+              </Link>
+            </div>
           </div>
         </div>
       </div>

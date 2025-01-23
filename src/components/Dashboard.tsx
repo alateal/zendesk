@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
 import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
 import IconBrandSlack from '@tabler/icons-react/dist/esm/icons/IconBrandSlack';
@@ -13,6 +13,8 @@ import IconDotsVertical from '@tabler/icons-react/dist/esm/icons/IconDotsVertica
 import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
 import IconStarFilled from '@tabler/icons-react/dist/esm/icons/IconStarFilled';
 import IconStar from '@tabler/icons-react/dist/esm/icons/IconStar';
+import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
+import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 
@@ -43,6 +45,7 @@ type Conversation = {
   };
   satisfaction_score?: string;
   is_important: boolean;
+  assigned_to?: string;
 };
 
 type Message = {
@@ -68,10 +71,18 @@ type ResponseTimeStats = {
   totalResponses: number;
 };
 
+// Add type for User
+type User = {
+  id: string;
+  display_name: string;
+  email: string;
+  role_id?: string;
+};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const [selectedNav, setSelectedNav] = useState('inbox');
-  const [selectedApp, setSelectedApp] = useState('whatsapp');
+  const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
@@ -87,6 +98,26 @@ const Dashboard = () => {
     averageResponseTime: 0,
     totalResponses: 0
   });
+  const [users, setUsers] = useState<User[]>([]);
+  const [isAssigneeOpen, setIsAssigneeOpen] = useState(false);
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+
+  // Add ref for the dropdown container
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Add click outside handler
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsAssigneeOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // Check authentication when component mounts
   useEffect(() => {
@@ -165,8 +196,8 @@ const Dashboard = () => {
           if (payload.new && 
               payload.new.organizations_id === selectedOrg && 
               payload.new.conversations_id === selectedApp) {
-            const newMessage = payload.new as Message;
-            setMessages((current) => [...current, newMessage]);
+          const newMessage = payload.new as Message;
+          setMessages((current) => [...current, newMessage]);
           }
         }
       )
@@ -204,19 +235,8 @@ const Dashboard = () => {
 
   // Helper function to get current conversation title
   const getCurrentConversationTitle = () => {
-    const currentApp = apps.find(app => app.id === selectedApp);
-    switch (currentApp?.id) {
-      case 'whatsapp':
-        return 'WhatsApp & Social';
-      case 'messenger':
-        return 'Messenger';
-      case 'email':
-        return 'Email';
-      case 'phone':
-        return 'Phone & SMS';
-      default:
-        return currentApp?.name || 'Conversation';
-    }
+    const currentConversation = conversations.find(conv => conv.id === selectedApp);
+    return currentConversation?.channels || 'New Chat';
   };
 
   useEffect(() => {
@@ -251,9 +271,6 @@ const Dashboard = () => {
     fetchOrganizations();
   }, []);
 
-  // Add this console log in the render to verify the state
-  console.log('Current organizations state:', organizations);
-
   const fetchConversations = async () => {
     try {
       console.log('Fetching conversations for org:', selectedOrg);
@@ -269,6 +286,7 @@ const Dashboard = () => {
           satisfaction_score,
           is_important,
           customer_id,
+          assigned_to,
           customers!conversations_customer_id_fkey (
             id,
             full_name,
@@ -290,6 +308,7 @@ const Dashboard = () => {
       if (conversationsError) throw conversationsError;
 
       if (conversationsData && conversationsData.length > 0) {
+        console.log('Fetched conversations with assignments:', conversationsData);
         const conversationsWithMessages = conversationsData.map(conv => {
           const messages = conv.messages || [];
           const sortedMessages = messages.sort((a, b) => 
@@ -489,11 +508,6 @@ const Dashboard = () => {
         icon: <IconInbox size={20} />
       },
       {
-        label: 'Response Time',
-        value: '2m',
-        icon: <IconChartBar size={20} />
-      },
-      {
         label: 'Messages',
         value: messages.length,
         icon: <IconMail size={20} />
@@ -545,16 +559,9 @@ const Dashboard = () => {
   }, [selectedOrg]);
 
   // Update the conversation click handler
-  const handleConversationClick = async (conversationId: string) => {
+  const handleConversationClick = (conversationId: string) => {
     setSelectedApp(conversationId);
-    
-    // Get current conversation
-    const conversation = conversations.find(conv => conv.id === conversationId);
-    
-    // Only update to Active if it's currently New
-    if (conversation?.status === 'New') {
-      await updateConversationStatus(conversationId, 'Active');
-    }
+    loadMessages(conversationId);
   };
 
   // Add close conversation handler
@@ -599,17 +606,21 @@ const Dashboard = () => {
 
   // Simplify the calculation function
   const calculateSatisfactionStats = (conversations: Conversation[]) => {
-    const ratedConversations = conversations.filter(conv => conv.satisfaction_score);
+    const ratedConversations = conversations.filter(conv => 
+      conv.satisfaction_score !== null && conv.satisfaction_score !== undefined
+    );
     const totalRatings = ratedConversations.length;
     
     if (totalRatings === 0) return { averageScore: 0, totalRatings: 0 };
     
-    const sum = ratedConversations.reduce((acc, conv) => 
-      acc + Number(conv.satisfaction_score || 0), 0
-    );
+    const sum = ratedConversations.reduce((acc, conv) => {
+      // Parse the satisfaction_score as a number
+      const score = parseInt(conv.satisfaction_score || '0', 10);
+      return acc + score;
+    }, 0);
     
     return {
-      averageScore: Math.floor(sum / totalRatings),
+      averageScore: Math.round((sum / totalRatings) * 10) / 10, // Round to 1 decimal
       totalRatings
     };
   };
@@ -693,6 +704,150 @@ const Dashboard = () => {
       if (error) throw error;
     } catch (error) {
       console.error('Error toggling importance:', error);
+    }
+  };
+
+  // Update the fetchUsers function to include better error handling
+  const fetchUsers = async () => {
+    try {
+      console.log('Starting fetchUsers. Organization:', selectedOrg);
+      
+      const { data, error } = await supabase
+        .from('users')
+        .select('id, display_name, email, role_id')
+        .eq('organizations_id', selectedOrg);
+
+      if (error) {
+        console.error('Error fetching users:', error);
+        throw error;
+      }
+
+      console.log('Fetched users:', data);
+      if (data) {
+        setUsers(data);
+      }
+    } catch (error) {
+      console.error('Error in fetchUsers:', error);
+    }
+  };
+
+  // Update the useEffect to fetch users when org is selected and when dropdown opens
+  useEffect(() => {
+    if (selectedOrg && isAssigneeOpen) {
+      fetchUsers();
+    }
+  }, [selectedOrg, isAssigneeOpen]);
+
+  // Update the handleAssigneeClick function with logging
+  const handleAssigneeClick = () => {
+    console.log('Dropdown clicked. Current state:', {
+      isAssigneeOpen: isAssigneeOpen,
+      selectedOrg: selectedOrg,
+      currentUserRole: currentUserRole
+    });
+    
+    setIsAssigneeOpen(!isAssigneeOpen);
+    if (!isAssigneeOpen && selectedOrg) {
+      console.log('Fetching users...');
+      fetchUsers();
+    }
+  };
+
+  // Update the checkUserRole function with logging
+  const checkUserRole = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      console.log('Current auth user:', user);
+      
+      if (!user) return;
+
+      const { data: userData, error } = await supabase
+        .from('users')
+        .select('role_id')
+        .eq('id', user.id)
+        .single();
+
+      if (error) throw error;
+      
+      console.log('User role data:', userData);
+      setCurrentUserRole(userData?.role_id || null);
+    } catch (error) {
+      console.error('Error checking user role:', error);
+    }
+  };
+
+  // Add useEffect to check role when component mounts
+  useEffect(() => {
+    checkUserRole();
+  }, []);
+
+  // Update the handleAssign function to ensure UI updates
+  const handleAssign = async (userId: string | null) => {
+    if (!selectedApp) {
+      console.log('No conversation selected');
+      return;
+    }
+
+    try {
+      console.log('Attempting assignment:', {
+        userId,
+        conversationId: selectedApp,
+        currentUserRole
+      });
+      
+      // Create update object based on whether we're assigning or unassigning
+      const updates = {
+        assigned_to: userId === null ? null : userId
+      };
+      
+      const { error } = await supabase
+        .from('conversations')
+        .update(updates)
+        .eq('id', selectedApp);
+
+      if (error) {
+        console.error('Assignment error:', error);
+        throw error;
+      }
+
+      console.log('Assignment successful');
+      setIsAssigneeOpen(false);
+      
+      // Fetch fresh data
+      const { data: updatedConversation, error: fetchError } = await supabase
+        .from('conversations')
+        .select(`
+          *,
+          customers!conversations_customer_id_fkey (
+            id,
+            full_name,
+            email
+          ),
+          messages!messages_conversations_id_fkey (
+            id,
+            content,
+            sender_id,
+            sender_type,
+            created_at,
+            conversations_id
+          )
+        `)
+        .eq('id', selectedApp)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      // Update the conversations list with the new data
+      setConversations(prevConversations => 
+        prevConversations.map(conv => 
+          conv.id === selectedApp 
+            ? { ...conv, ...updatedConversation }
+            : conv
+        )
+      );
+
+    } catch (error) {
+      console.error('Error assigning conversation:', error);
     }
   };
 
@@ -801,7 +956,7 @@ const Dashboard = () => {
                   )}
                 </div>
               )}
-              <h2 className="text-lg font-semibold text-[#3C1810]">Inbox</h2>
+            <h2 className="text-lg font-semibold text-[#3C1810]">Inbox</h2>
             </div>
             <button 
               onClick={createNewConversation}
@@ -829,9 +984,9 @@ const Dashboard = () => {
               : null;
 
             return (
-              <button
+              <div
                 key={conversation.id}
-                className={`w-full p-4 flex flex-col border-b border-[#8B4513] relative ${
+                className={`w-full p-4 flex flex-col border-b border-[#8B4513] relative cursor-pointer ${
                   selectedApp === conversation.id ? 'bg-[#F5E6D3]' : 'hover:bg-[#F5E6D3]'
                 }`}
                 onClick={() => handleConversationClick(conversation.id)}
@@ -867,7 +1022,7 @@ const Dashboard = () => {
                         })}
                       </span>
                     </div>
-                  </div>
+              </div>
                   {latestCustomerMessage && (
                     <p className="text-sm text-[#5C2E0E] truncate">
                       {latestCustomerMessage.content}
@@ -889,7 +1044,7 @@ const Dashboard = () => {
                     <IconStar size={20} className="text-[#8B4513]" />
                   )}
                 </button>
-              </button>
+              </div>
             );
           })}
         </div>
@@ -898,10 +1053,10 @@ const Dashboard = () => {
       {/* Main Content */}
       <div className="flex-1 flex">
         {/* Chat Area */}
-        <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col">
           {/* Chat Header */}
           <div className="p-4 border-b border-[#8B4513] flex items-center justify-between">
-            <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-4">
               <div className="flex flex-col">
                 <h2 className="text-lg font-semibold text-[#3C1810]">
                   {getCurrentConversation()?.channels || 'New Chat'}
@@ -917,50 +1072,50 @@ const Dashboard = () => {
                 className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded"
               >
                 Close Chat
-              </button>
+            </button>
               <button className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded">
-                <IconDotsVertical size={20} />
-              </button>
-            </div>
+              <IconDotsVertical size={20} />
+            </button>
           </div>
+        </div>
 
-          {/* Messages */}
+        {/* Messages */}
           <div className="flex-1 p-6 overflow-y-auto bg-[#FDF6E3]">
-            {messages.length === 0 ? (
+          {messages.length === 0 ? (
               <div className="bg-[#F5E6D3] rounded-lg border border-[#8B4513] p-6 max-w-2xl mx-auto">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="bg-[#8B4513] text-[#FDF6E3] px-3 py-1 rounded-full text-sm">
-                    Demo Message
-                  </div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="bg-[#8B4513] text-[#FDF6E3] px-3 py-1 rounded-full text-sm">
+                  Demo Message
                 </div>
-                <p className="text-[#3C1810] mb-4">
-                  This is a demo message. It shows how a customer conversation from WhatsApp, 
-                  Instagram or Facebook will look in your Inbox.
-                </p>
-                <p className="text-[#5C2E0E] text-sm">
-                  Once a channel is set up, all conversations come straight to your Inbox, 
-                  so you can route them to the right team.
-                </p>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`max-w-2xl ${
+              <p className="text-[#3C1810] mb-4">
+                This is a demo message. It shows how a customer conversation from WhatsApp, 
+                Instagram or Facebook will look in your Inbox.
+              </p>
+              <p className="text-[#5C2E0E] text-sm">
+                Once a channel is set up, all conversations come straight to your Inbox, 
+                so you can route them to the right team.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`max-w-2xl ${
                       msg.sender_type === 'user' ? 'ml-auto' : 'mr-auto'
-                    }`}
-                  >
-                    <div
-                      className={`rounded-lg p-4 ${
+                  }`}
+                >
+                  <div
+                    className={`rounded-lg p-4 ${
                         msg.sender_type === 'user'
                           ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
                           : msg.sender_type === 'system'
                           ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
                           : 'bg-[#FFFFFF] text-[#3C1810] border border-[#8B4513]'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 mb-1">
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
                         <span className={`text-sm font-medium ${
                           msg.sender_type === 'user' || msg.sender_type === 'system'
                             ? 'text-[#5C2E0E]'
@@ -969,7 +1124,7 @@ const Dashboard = () => {
                           {msg.sender_type === 'user' 
                             ? 'Agent' 
                             : getCurrentConversation()?.customer_name || 'Unknown Customer'}
-                        </span>
+                      </span>
                         <span className={`text-xs ${
                           msg.sender_type === 'user' || msg.sender_type === 'system'
                             ? 'text-[#5C2E0E] opacity-75'
@@ -979,8 +1134,8 @@ const Dashboard = () => {
                             hour: '2-digit',
                             minute: '2-digit'
                           })}
-                        </span>
-                      </div>
+                      </span>
+                    </div>
                       <p className={
                         msg.sender_type === 'user' || msg.sender_type === 'system'
                           ? 'text-[#3C1810]'
@@ -988,35 +1143,35 @@ const Dashboard = () => {
                       }>
                         {msg.content}
                       </p>
-                    </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-          {/* Input Box */}
+        {/* Input Box */}
           <div className="p-4 border-t border-[#8B4513]">
-            <div className="flex space-x-4">
-              <input
-                type="text"
-                placeholder="Type your message..."
-                className="flex-1 px-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-              />
-              <button 
-                onClick={sendMessage}
-                className="px-6 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center space-x-2"
-              >
-                <IconSend size={20} />
-                <span>Send</span>
+          <div className="flex space-x-4">
+            <input
+              type="text"
+              placeholder="Type your message..."
+              className="flex-1 px-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+            />
+            <button 
+              onClick={sendMessage}
+              className="px-6 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center space-x-2"
+            >
+              <IconSend size={20} />
+              <span>Send</span>
               </button>
             </div>
           </div>
@@ -1026,12 +1181,80 @@ const Dashboard = () => {
         <div className="w-80 border-l border-[#8B4513] bg-[#FDF6E3] p-4">
           <h3 className="text-lg font-semibold text-[#3C1810] mb-4">Insights</h3>
           
+          {/* Assignee Section */}
+          <div className="mb-6">
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={handleAssigneeClick}
+                className={`w-full bg-[#F5E6D3] p-4 rounded-lg border border-[#8B4513] flex items-center justify-between ${
+                  currentUserRole !== '5015a883-2f23-4bec-ac3d-9cfca8ecd824' ? 'cursor-not-allowed opacity-75' : ''
+                }`}
+                disabled={currentUserRole !== '5015a883-2f23-4bec-ac3d-9cfca8ecd824'}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-[#5C2E0E]">Assignee</span>
+                  <span className="text-[#3C1810] font-medium">
+                    {(() => {
+                      const conversation = getCurrentConversation();
+                      const assignedUser = users.find(u => u.id === conversation?.assigned_to);
+                      return assignedUser?.display_name || 'Unassigned';
+                    })()}
+                  </span>
+                </div>
+                {currentUserRole === '5015a883-2f23-4bec-ac3d-9cfca8ecd824' && (
+                  <IconChevronDown 
+                    size={20} 
+                    className={`text-[#8B4513] transition-transform ${isAssigneeOpen ? 'rotate-180' : ''}`}
+                  />
+                )}
+              </button>
+
+              {/* Dropdown Menu */}
+              {isAssigneeOpen && (
+                <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-[#8B4513] rounded-lg shadow-lg z-10">
+                  <div className="p-2">
+                    <div className="text-sm text-[#5C2E0E] mb-2 px-4">
+                      Debug Info:
+                      <br />
+                      Role: {currentUserRole}
+                      <br />
+                      Expected: 5015a883-2f23-4bec-ac3d-9cfca8ecd824
+                    </div>
+                    {users.map((user) => (
+                      <button
+                        key={user.id}
+                        onClick={() => handleAssign(user.id)}
+                        className="w-full text-left px-4 py-2 hover:bg-[#F5E6D3] rounded flex items-center justify-between"
+                      >
+                        <span className="text-[#3C1810]">{user.display_name}</span>
+                        {getCurrentConversation()?.assigned_to === user.id && (
+                          <IconCheck size={16} className="text-[#8B4513]" />
+                        )}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => handleAssign(null)}
+                      className="w-full text-left px-4 py-2 hover:bg-[#F5E6D3] rounded flex items-center justify-between"
+                    >
+                      <span className="text-[#3C1810]">Unassign</span>
+                      {!getCurrentConversation()?.assigned_to && (
+                        <IconCheck size={16} className="text-[#8B4513]" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="space-y-4">
             {/* Response Time Box */}
             <div className="bg-[#F5E6D3] rounded-lg p-4 border border-[#8B4513]">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-[#5C2E0E]">Avg. Response Time</span>
-                <span className="text-[#3C1810]">⏱️</span>
+                <span className="text-[#3C1810]">
+                  <IconChartBar size={20} />
+                </span>
               </div>
               <div className="flex flex-col">
                 <div className="text-lg font-semibold text-[#3C1810]">
@@ -1055,23 +1278,32 @@ const Dashboard = () => {
               </div>
               <div className="flex flex-col">
                 <div className="text-lg font-semibold text-[#3C1810] flex items-center gap-1">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <span 
-                      key={star} 
-                      className={star <= satisfactionStats.averageScore 
-                        ? 'text-[#8B4513]' 
-                        : 'text-[#8B4513] opacity-30'
-                      }
-                    >
-                      ★
-                    </span>
-                  ))}
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    const currentConversation = getCurrentConversation();
+                    const hasRating = currentConversation?.satisfaction_score !== null && 
+                                     currentConversation?.satisfaction_score !== undefined;
+                    const rating = hasRating ? parseInt(currentConversation?.satisfaction_score || '0', 10) : 0;
+                    
+                    return (
+                      <span 
+                        key={star} 
+                        className={`text-[#8B4513] ${
+                          !hasRating 
+                            ? 'opacity-30' 
+                            : star <= rating 
+                              ? 'opacity-100' 
+                              : 'opacity-30'
+                        }`}
+                      >
+                        {!hasRating ? '☆' : star <= rating ? '★' : '☆'}
+                      </span>
+                    );
+                  })}
                 </div>
                 <div className="text-sm text-[#5C2E0E] mt-1">
-                  {satisfactionStats.averageScore} / 5
-                  <span className="text-xs ml-2">
-                    ({satisfactionStats.totalRatings} ratings)
-                  </span>
+                  {!getCurrentConversation()?.satisfaction_score 
+                    ? 'No rating yet'
+                    : `${getCurrentConversation()?.satisfaction_score} / 5`}
                 </div>
               </div>
             </div>

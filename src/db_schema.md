@@ -5,9 +5,9 @@
 - **created_at**: `timestamptz`
 - **display_name**: `text`
 - **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
-- **role_id**: `uuid` (Foreign Key to `role.id`)
 - **email**: `text`
 - **auth.users.id**: References authentication user ID
+- **role_id**: `uuid` (Foreign Key to `role.id`)
 
 ---
 
@@ -33,9 +33,10 @@
 - **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
 - **channels**: `text`
 - **status**: `text`
-- **customer_id**: `text`(Foreign Key to `customers.id`)
+- **customer_id**: `uuid`(Foreign Key to `customers.id`)
 - **satisfaction_score**: `text`
-
+- **is_important**: `boolean`
+- **assigned_to**: `uuid` (Foreign Key to `users.id`, nullable)
 
 ---
 
@@ -56,4 +57,5 @@
 - **full_name**: `text`
 - **email**: `text`
 - **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
+
 
