@@ -15,6 +15,13 @@ import IconStar from '@tabler/icons-react/dist/esm/icons/IconStar';
 import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
 import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
 import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
+import IconX from '@tabler/icons-react/dist/esm/icons/IconX';
+import IconUsers from '@tabler/icons-react/dist/esm/icons/IconUsers';
+import IconTag from '@tabler/icons-react/dist/esm/icons/IconTag';
+import IconBuilding from '@tabler/icons-react/dist/esm/icons/IconBuilding';
+import IconCalendar from '@tabler/icons-react/dist/esm/icons/IconCalendar';
+import IconStatusChange from '@tabler/icons-react/dist/esm/icons/IconStatusChange';
+import IconCategory from '@tabler/icons-react/dist/esm/icons/IconCategory';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 
@@ -76,7 +83,7 @@ type User = {
   id: string;
   display_name: string;
   email: string;
-  role_id?: string;
+  role_id: string;
 };
 
 const Dashboard = () => {
@@ -103,9 +110,20 @@ const Dashboard = () => {
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const profileDropdownRef = useRef<HTMLDivElement>(null);
-
-  // Add ref for the dropdown container
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedAssignee, setSelectedAssignee] = useState<string | null>(null);
+  const [isAssigneeFilterOpen, setIsAssigneeFilterOpen] = useState(false);
+  const assigneeFilterRef = useRef<HTMLDivElement>(null);
+  const [filteredConversations, setFilteredConversations] = useState<Conversation[]>([]);
+  const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
+  const [isStatusFilterOpen, setIsStatusFilterOpen] = useState(false);
+  const statusFilterRef = useRef<HTMLDivElement>(null);
+  const [overlayConversations, setOverlayConversations] = useState<Conversation[]>([]);
+  const [selectedPriority, setSelectedPriority] = useState<boolean | null>(null);
+  const [isPriorityFilterOpen, setIsPriorityFilterOpen] = useState(false);
+  const priorityFilterRef = useRef<HTMLDivElement>(null);
 
   // Add click outside handler
   useEffect(() => {
@@ -794,21 +812,21 @@ const Dashboard = () => {
   // Update the fetchUsers function
   const fetchUsers = async () => {
     try {
-      const { data, error } = await supabase
+      const { data: usersData, error } = await supabase
         .from('users')
-        .select('id, display_name, email, role_id')
-        .eq('organizations_id', selectedOrg);
+        .select(`
+          id,
+          display_name,
+          email,
+          role_id
+        `)
+        .order('display_name');
 
-      if (error) {
-        console.error('Error fetching users:', error);
-        throw error;
-      }
-
-      if (data) {
-        setUsers(data);
-      }
+      if (error) throw error;
+      
+      setUsers(usersData || []);
     } catch (error) {
-      console.error('Error in fetchUsers:', error);
+      console.error('Error fetching users:', error);
     }
   };
 
@@ -887,6 +905,149 @@ const Dashboard = () => {
     fetchCurrentUser();
   }, []);
 
+  // Update getOverlayConversations to handle search properly
+  const getOverlayConversations = async (searchQuery: string, assigneeId: string | null, status: string | null, priority: boolean | null) => {
+    try {
+      if (!selectedOrg) {
+        console.log('No organization selected');
+        return;
+      }
+
+      // If there's no filter and no search query, don't show anything
+      if (!searchQuery && !assigneeId && !status && priority === null) {
+        setOverlayConversations([]);
+        return;
+      }
+
+      let supabaseQuery = supabase
+        .from('conversations')
+        .select(`
+          id,
+          created_at,
+          organizations_id,
+          channels,
+          status,
+          assigned_to,
+          is_important,
+          customers (
+            id,
+            full_name,
+            email
+          ),
+          messages (
+            id,
+            content,
+            sender_type,
+            created_at
+          )
+        `)
+        .eq('organizations_id', selectedOrg);
+
+      // Apply filters if they exist
+      if (assigneeId) {
+        supabaseQuery = supabaseQuery.eq('assigned_to', assigneeId);
+      } else if (status) {
+        supabaseQuery = supabaseQuery.eq('status', status);
+      } else if (priority !== null) {
+        supabaseQuery = supabaseQuery.eq('is_important', priority);
+      }
+
+      const { data, error } = await supabaseQuery;
+
+      if (error) throw error;
+
+      // Filter by search query if it exists
+      let filteredData = data || [];
+      if (searchQuery.trim()) {
+        const searchLower = searchQuery.toLowerCase();
+        filteredData = filteredData.filter(conv => {
+          // Search in customer name
+          const customerMatch = conv.customers?.full_name?.toLowerCase().includes(searchLower);
+          
+          // Search in messages
+          const messageMatch = conv.messages?.some(msg => 
+            msg.content?.toLowerCase().includes(searchLower)
+          );
+
+          return customerMatch || messageMatch;
+        });
+      }
+
+      setOverlayConversations(filteredData);
+    } catch (error) {
+      console.error('Error fetching overlay conversations:', error);
+      setOverlayConversations([]);
+    }
+  };
+
+  // Add handler for priority selection
+  const handlePrioritySelect = async (isPriority: boolean) => {
+    const newPriority = selectedPriority === isPriority ? null : isPriority;
+    setSelectedPriority(newPriority);
+    setSelectedAssignee(null);
+    setSelectedStatus(null);
+    setIsPriorityFilterOpen(false);
+    await getOverlayConversations(searchQuery, null, null, newPriority);
+  };
+
+  // Update other handlers to include priority parameter
+  const handleAssigneeSelect = async (userId: string) => {
+    const newAssignee = selectedAssignee === userId ? null : userId;
+    setSelectedAssignee(newAssignee);
+    setSelectedStatus(null);
+    setSelectedPriority(null);
+    setIsAssigneeFilterOpen(false);
+    await getOverlayConversations(searchQuery, newAssignee, null, null);
+  };
+
+  const handleStatusSelect = async (status: string) => {
+    const newStatus = selectedStatus === status ? null : status;
+    setSelectedStatus(newStatus);
+    setSelectedAssignee(null);
+    setSelectedPriority(null);
+    setIsStatusFilterOpen(false);
+    await getOverlayConversations(searchQuery, null, newStatus, null);
+  };
+
+  // Update the Priority filter button in the search overlay
+  <div className="relative" ref={priorityFilterRef}>
+    <button 
+      onClick={() => setIsPriorityFilterOpen(!isPriorityFilterOpen)}
+      className={`px-3 py-1.5 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg flex items-center gap-1 ${
+        selectedPriority !== null ? 'bg-[#F5E6D3] border border-[#8B4513]' : ''
+      }`}
+    >
+      <IconStar size={16} />
+      Priority
+    </button>
+    
+    {isPriorityFilterOpen && (
+      <div className="absolute top-full left-0 mt-1 w-40 bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-[1000]">
+        <div className="p-2 space-y-1">
+          {[
+            { label: 'Priority', value: true },
+            { label: 'Non-Priority', value: false }
+          ].map((option) => (
+            <button
+              key={option.label}
+              onClick={() => handlePrioritySelect(option.value)}
+              className={`w-full px-3 py-2 text-left text-sm rounded-lg flex items-center justify-between ${
+                selectedPriority === option.value 
+                  ? 'bg-[#F5E6D3] text-[#3C1810]' 
+                  : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+              }`}
+            >
+              {option.label}
+              {selectedPriority === option.value && (
+                <IconCheck size={16} className="text-[#8B4513]" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    )}
+  </div>
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
@@ -899,7 +1060,13 @@ const Dashboard = () => {
         {/* Rest of the sidebar navigation */}
         <nav className="flex flex-col space-y-4 flex-1">
           <button
-            onClick={() => handleNavigation('inbox')}
+            onClick={() => {
+              setSelectedNav('inbox');
+              setIsSearchOpen(false);
+              setSearchQuery('');
+              setSelectedAssignee(null);
+              setSelectedStatus(null);
+            }}
             className={`p-2 rounded-lg relative ${
               selectedNav === 'inbox' ? 'text-[#8B4513] bg-[#F5E6D3]' : 'text-[#3C1810] hover:bg-[#F5E6D3]'
             }`}
@@ -908,7 +1075,9 @@ const Dashboard = () => {
             {/* Always show the count badge */}
             {newConversationsCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-[#8B4513] text-[#FDF6E3] text-xs w-4 h-4 flex items-center justify-center rounded-full">
-                {newConversationsCount}
+                {conversations.filter(conv => 
+                  conv.status === 'New' || conv.status === 'Active'
+                ).length}
               </span>
             )}
           </button>
@@ -1039,18 +1208,264 @@ const Dashboard = () => {
         <div className="p-6 border-b border-[#8B4513]">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-[#3C1810]">Inbox</h2>
-            <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
-              <IconPlus size={20} />
+            <button 
+              onClick={() => setIsSearchOpen(true)}
+              className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]"
+            >
+              <IconSearch size={20} />
             </button>
           </div>
         </div>
+
+        {/* Add Search Overlay */}
+        {isSearchOpen && (
+          <div 
+            className="fixed bg-[#FDF6E3] z-[20] border-l border-[#8B4513]"
+            style={{ 
+              left: '320px', // Width of main sidebar (64px) + secondary nav (256px)
+              width: 'calc(100% - 320px)', // Full width minus the sidebars
+              top: 0,
+              bottom: 0,
+              position: 'absolute',
+              borderLeft: 'none' // Remove right border to prevent double border
+            }}
+          >
+            {/* Search Header */}
+            <div className="p-6 border-b border-[#8B4513]">
+              <div className="flex items-center gap-4">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={searchQuery}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setSearchQuery(value);
+                      getOverlayConversations(value, selectedAssignee, selectedStatus, selectedPriority);
+                    }}
+                    placeholder="Search conversations here..."
+                    className="w-full pl-10 pr-4 py-2.5 bg-[#F5E6D3] border border-[#8B4513] rounded-lg text-[#3C1810] placeholder-[#8B6B4D] focus:outline-none focus:ring-1 focus:ring-[#8B4513]"
+                  />
+                  <IconSearch 
+                    size={20} 
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8B6B4D]" 
+                  />
+                </div>
+                <button 
+                  onClick={() => {
+                    setIsSearchOpen(false);
+                    setSearchQuery('');
+                  }}
+                  className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]"
+                >
+                  <IconX size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Update the Search Filters */}
+            <div className="px-6 py-3 border-b border-[#8B4513] flex items-center gap-2 overflow-visible">
+              <button className="px-3 py-1.5 text-sm text-[#3C1810] bg-[#F5E6D3] rounded-lg border border-[#8B4513]">
+                All
+              </button>
+              <div className="relative" ref={assigneeFilterRef}>
+                <button 
+                  onClick={() => setIsAssigneeFilterOpen(!isAssigneeFilterOpen)}
+                  className={`px-3 py-1.5 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg flex items-center gap-1 ${
+                    selectedAssignee ? 'bg-[#F5E6D3] border border-[#8B4513]' : ''
+                  }`}
+                >
+                  <IconUser size={16} />
+                  Assigned to
+                </button>
+                
+                {isAssigneeFilterOpen && (
+                  <div className="absolute top-full left-0 mt-1 w-56 bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-[1000]">
+                    <div className="p-2 space-y-1">
+                      {users.map((user) => (
+                        <button
+                          key={user.id}
+                          onClick={() => handleAssigneeSelect(user.id)}
+                          className={`w-full px-3 py-2 text-left text-sm rounded-lg flex items-center gap-2 ${
+                            selectedAssignee === user.id 
+                              ? 'bg-[#F5E6D3] text-[#3C1810]' 
+                              : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+                          }`}
+                        >
+                          <div className="w-6 h-6 rounded-full bg-[#8B4513] text-[#FDF6E3] flex items-center justify-center">
+                            {user.display_name?.[0] || '?'}
+                          </div>
+                          {user.display_name || 'Unknown User'}
+                          {selectedAssignee === user.id && (
+                            <IconCheck size={16} className="ml-auto text-[#8B4513]" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative" ref={statusFilterRef}>
+                <button 
+                  onClick={() => setIsStatusFilterOpen(!isStatusFilterOpen)}
+                  className={`px-3 py-1.5 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg flex items-center gap-1 ${
+                    selectedStatus ? 'bg-[#F5E6D3] border border-[#8B4513]' : ''
+                  }`}
+                >
+                  <IconStatusChange size={16} />
+                  Status
+                </button>
+                
+                {isStatusFilterOpen && (
+                  <div className="absolute top-full left-0 mt-1 w-40 bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-[1000]">
+                    <div className="p-2 space-y-1">
+                      {['New', 'Active', 'Closed'].map((status) => (
+                        <button
+                          key={status}
+                          onClick={() => handleStatusSelect(status)}
+                          className={`w-full px-3 py-2 text-left text-sm rounded-lg flex items-center justify-between ${
+                            selectedStatus === status 
+                              ? 'bg-[#F5E6D3] text-[#3C1810]' 
+                              : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+                          }`}
+                        >
+                          {status}
+                          {selectedStatus === status && (
+                            <IconCheck size={16} className="text-[#8B4513]" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative" ref={priorityFilterRef}>
+                <button 
+                  onClick={() => setIsPriorityFilterOpen(!isPriorityFilterOpen)}
+                  className={`px-3 py-1.5 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg flex items-center gap-1 ${
+                    selectedPriority !== null ? 'bg-[#F5E6D3] border border-[#8B4513]' : ''
+                  }`}
+                >
+                  <IconStar size={16} />
+                  Priority
+                </button>
+                
+                {isPriorityFilterOpen && (
+                  <div className="absolute top-full left-0 mt-1 w-40 bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-[1000]">
+                    <div className="p-2 space-y-1">
+                      {[
+                        { label: 'Priority', value: true },
+                        { label: 'Non-Priority', value: false }
+                      ].map((option) => (
+                        <button
+                          key={option.label}
+                          onClick={() => handlePrioritySelect(option.value)}
+                          className={`w-full px-3 py-2 text-left text-sm rounded-lg flex items-center justify-between ${
+                            selectedPriority === option.value 
+                              ? 'bg-[#F5E6D3] text-[#3C1810]' 
+                              : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+                          }`}
+                        >
+                          {option.label}
+                          {selectedPriority === option.value && (
+                            <IconCheck size={16} className="text-[#8B4513]" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button className="px-3 py-1.5 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg flex items-center gap-1">
+                <IconUsers size={16} />
+                Team
+              </button>
+            </div>
+
+            {/* Search Results Area */}
+            <div className="flex-1 overflow-auto">
+              {(searchQuery || selectedAssignee || selectedStatus || selectedPriority) ? (
+                <div className="p-6 space-y-2">
+                  {overlayConversations.map((conversation) => (
+                    <div 
+                      key={conversation.id}
+                      onClick={() => {
+                        setIsSearchOpen(false);
+                        setSearchQuery('');
+                        setSelectedAssignee(null);
+                        setSelectedStatus(null);
+                        setSelectedPriority(null);
+                        setSelectedApp(conversation.id);
+                      }}
+                      className="p-4 border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3] cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-[#3C1810] font-medium">
+                            {conversation.customers?.full_name || 'Unknown Customer'}
+                          </h3>
+                          {conversation.messages && conversation.messages.length > 0 && (
+                            <p className="text-sm text-[#5C2E0E] line-clamp-1">
+                              {conversation.messages[0].content}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-xs text-[#8B6B4D]">
+                            {conversation.channels}
+                          </span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            conversation.status === 'Closed' 
+                              ? 'bg-gray-100 text-gray-600' 
+                              : conversation.status === 'Active'
+                              ? 'bg-green-100 text-green-600'
+                              : 'bg-yellow-100 text-yellow-600'
+                          }`}>
+                            {conversation.status}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {overlayConversations.length === 0 && (
+                    <div className="text-center text-[#5C2E0E] mt-20">
+                      {searchQuery 
+                        ? 'No conversations found matching your search.'
+                        : selectedAssignee 
+                        ? 'No conversations found for this assignee.'
+                        : selectedStatus
+                        ? `No ${selectedStatus.toLowerCase()} conversations found.`
+                        : selectedPriority
+                        ? 'No conversations found for the selected priority.'
+                        : 'Type to search for conversations.'
+                      }
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center text-[#5C2E0E] mt-20">
+                  Type to search for conversations or select a filter.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Navigation Items */}
         <div className="flex-1 overflow-y-auto">
           <div className="p-4 space-y-1">
             {/* Your inbox */}
             <div className="mb-4">
-              <div className="flex items-center gap-2 px-3 py-2">
+              <div className="flex items-center gap-2 px-3 py-2" 
+                onClick={() => {
+                  setSelectedNav('inbox');
+                  setIsSearchOpen(false);
+                  setSearchQuery('');
+                  setSelectedAssignee(null);
+                  setSelectedStatus(null);
+                }}
+                style={{ cursor: 'pointer' }}
+              >
                 <IconInbox size={20} className="text-[#8B4513]" />
                 <span className="text-sm font-medium text-[#3C1810]">Your Inbox</span>
                 {newConversationsCount > 0 && (
@@ -1130,17 +1545,22 @@ const Dashboard = () => {
         {/* Header */}
         <div className="p-6 border-b border-[#8B4513]">
           <div className="flex items-center justify-between h-9">
-            <div className="flex flex-col">
+            <div className="flex items-center gap-3">
+              {/* Organization Logo - only show if logoUrl exists */}
+              {organizations.find(org => org.id === selectedOrg)?.logoUrl && (
+                <div className="w-8 h-8 rounded-lg border border-[#8B4513] overflow-hidden flex items-center justify-center bg-[#F5E6D3]">
+                  <img 
+                    src={organizations.find(org => org.id === selectedOrg)?.logoUrl} 
+                    alt="Organization Logo" 
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+              {/* Organization Name */}
               <h2 className="text-xl font-semibold text-[#3C1810]">
                 {organizations.find(org => org.id === selectedOrg)?.name || 'Loading...'}
               </h2>
             </div>
-            <button 
-              onClick={createNewConversation}
-              className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]"
-            >
-              <IconPlus size={20} />
-            </button>
           </div>
         </div>
 
@@ -1225,11 +1645,11 @@ const Dashboard = () => {
         <div className="flex-1 flex flex-col">
           {/* Chat Header */}
           <div className="p-6 border-b border-[#8B4513]">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-[#3C1810]">
+            <div className="flex items-center justify-between h-9">
+              <h2 className="text-xl font-semibold text-[#3C1810]">
                 {getCurrentConversation()?.channels || 'New Chat'}
               </h2>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <button
                   onClick={handleCloseConversation}
                   className="px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg"

@@ -7,7 +7,6 @@ import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
 import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
 import IconPlus from '@tabler/icons-react/dist/esm/icons/IconPlus';
 import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
-import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 import IconArticle from '@tabler/icons-react/dist/esm/icons/IconArticle';
@@ -311,10 +310,52 @@ const KnowledgeBase = () => {
     });
   };
 
+  // Update the formatDate function to show relative time
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '';
+    
     const date = new Date(dateString);
-    return date.toLocaleString();
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    
+    // Less than a minute
+    if (diffInSeconds < 60) {
+      return 'just now';
+    }
+    
+    // Less than an hour
+    if (diffInSeconds < 3600) {
+      const minutes = Math.floor(diffInSeconds / 60);
+      return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`;
+    }
+    
+    // Less than a day
+    if (diffInSeconds < 86400) {
+      const hours = Math.floor(diffInSeconds / 3600);
+      return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    }
+    
+    // Less than a week
+    if (diffInSeconds < 604800) {
+      const days = Math.floor(diffInSeconds / 86400);
+      return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+    }
+    
+    // Less than a month
+    if (diffInSeconds < 2592000) {
+      const weeks = Math.floor(diffInSeconds / 604800);
+      return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
+    }
+    
+    // Less than a year
+    if (diffInSeconds < 31536000) {
+      const months = Math.floor(diffInSeconds / 2592000);
+      return `${months} ${months === 1 ? 'month' : 'months'} ago`;
+    }
+    
+    // More than a year
+    const years = Math.floor(diffInSeconds / 31536000);
+    return `${years} ${years === 1 ? 'year' : 'years'} ago`;
   };
 
   // Update handleCreateArticle to fix the single() error
@@ -554,8 +595,8 @@ const KnowledgeBase = () => {
 
       {/* Secondary Sidebar - Knowledge Base specific */}
       <div className="w-80 border-r border-[#8B4513] flex flex-col">
-        <div className="p-4 border-b border-[#8B4513]">
-          <div className="flex items-center justify-between mb-4">
+        <div className="p-6 border-b border-[#8B4513]">
+          <div className="flex items-center justify-between h-9">
             <h2 className="text-xl font-semibold text-[#3C1810]">Knowledge Bar</h2>
             <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
               <IconPlus size={20} />
@@ -598,22 +639,24 @@ const KnowledgeBase = () => {
         {selectedSection === 'content' ? (
           <div className="flex-1 overflow-auto">
             {/* Header */}
-            <div className="p-6 border-b border-[#8B4513] flex justify-between items-center">
-              <h1 className="text-2xl font-bold text-[#3C1810]">Content</h1>
-              <div className="flex gap-2">
-                <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
-                  Content reporting
-                </button>
-                <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
-                  New folder
-                </button>
-                <button 
-                  onClick={handleNewContentClick}
-                  className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
-                >
-                  <IconPlus size={20} />
-                  New content
-                </button>
+            <div className="p-6 border-b border-[#8B4513]">
+              <div className="flex items-center justify-between h-9">
+                <h1 className="text-xl font-semibold text-[#3C1810]">Content</h1>
+                <div className="flex items-center gap-2">
+                  <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
+                    Content reporting
+                  </button>
+                  <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
+                    New folder
+                  </button>
+                  <button 
+                    onClick={handleNewContentClick}
+                    className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
+                  >
+                    <IconPlus size={20} />
+                    New content
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -698,88 +741,96 @@ const KnowledgeBase = () => {
             </div>
           </div>
         ) : (
-          <div className="p-6 space-y-8">
+          <div className="flex-1 overflow-auto">
             {/* Header */}
-            <div className="p-6 border-b border-[#8B4513] flex justify-between items-center">
-              <h1 className="text-2xl font-bold text-[#3C1810]">Sources</h1>
-              <button 
-                onClick={handleNewContentClick}
-                className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
-              >
-                <IconPlus size={20} />
-                New content
-              </button>
-            </div>
-
-            {/* Public Articles Section */}
-            <div className="space-y-4">
-              <div className="flex items-start gap-4">
-                <div className="p-2 bg-[#F5E6D3] rounded-lg">
-                  <IconArticle size={24} className="text-[#8B4513]" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-[#3C1810]">Public articles</h2>
-                  <p className="text-[#5C2E0E] text-sm">
-                    Let AI Agent use public articles from your Help Center.
-                  </p>
-                </div>
-              </div>
-
-              {/* Public Articles List - Only show header */}
-              <div className="ml-12 space-y-2">
-                <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
-                  <div className="flex items-center gap-3">
-                    <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
-                    <div>
-                      <span className="text-[#3C1810] font-medium">Handle Bar</span>
-                      <span className="text-[#5C2E0E] text-sm ml-2">{publicArticles.length} articles</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <IconCheck size={16} className="text-[#8B4513]" />
-                    <button 
-                      onClick={() => handleOpenModal('public')}
-                      className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
-                    >
-                      Add article
-                    </button>
-                  </div>
-                </div>
+            <div className="p-6 border-b border-[#8B4513]">
+              <div className="flex items-center justify-between h-9">
+                <h1 className="text-xl font-semibold text-[#3C1810]">Sources</h1>
+                <button 
+                  onClick={handleNewContentClick}
+                  className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
+                >
+                  <IconPlus size={20} />
+                  New content
+                </button>
               </div>
             </div>
-
-            {/* Internal Articles Section */}
-            <div className="space-y-4">
-              <div className="flex items-start gap-4">
-                <div className="p-2 bg-[#F5E6D3] rounded-lg">
-                  <IconLock size={24} className="text-[#8B4513]" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-semibold text-[#3C1810]">Internal articles</h2>
-                  <p className="text-[#5C2E0E] text-sm">
-                    Give AI Agent internal knowledge only available to you and your team.
-                  </p>
-                </div>
-              </div>
-
-              {/* Internal Articles List */}
-              <div className="ml-12 space-y-2">
-                <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
-                  <div className="flex items-center gap-3">
-                    <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
+            
+            {/* Sources content with padding */}
+            <div className="p-6">
+              {/* Public Articles Section */}
+              <div className="space-y-8">
+                {/* Public Articles */}
+                <div className="space-y-6">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2 bg-[#F5E6D3] rounded-lg">
+                      <IconArticle size={24} className="text-[#8B4513]" />
+                    </div>
                     <div>
-                      <span className="text-[#3C1810] font-medium">Handle Bar</span>
-                      <span className="text-[#5C2E0E] text-sm ml-2">{internalArticles.length} articles</span>
+                      <h2 className="text-xl font-semibold text-[#3C1810]">Public articles</h2>
+                      <p className="text-[#5C2E0E] text-sm">
+                        Let AI Agent use public articles from your Help Center.
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <IconCheck size={16} className="text-[#8B4513]" />
-                    <button 
-                      onClick={() => handleOpenModal('internal')}
-                      className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
-                    >
-                      Add article
-                    </button>
+
+                  {/* Public Articles List */}
+                  <div className="ml-12 space-y-2">
+                    <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
+                      <div className="flex items-center gap-3">
+                        <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
+                        <div>
+                          <span className="text-[#3C1810] font-medium">Handle Bar</span>
+                          <span className="text-[#5C2E0E] text-sm ml-2">{publicArticles.length} articles</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <IconCheck size={16} className="text-[#8B4513]" />
+                        <button 
+                          onClick={() => handleOpenModal('public')}
+                          className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
+                        >
+                          Add article
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Internal Articles */}
+                <div className="space-y-6">
+                  <div className="flex items-start gap-4">
+                    <div className="p-2 bg-[#F5E6D3] rounded-lg">
+                      <IconLock size={24} className="text-[#8B4513]" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-[#3C1810]">Internal articles</h2>
+                      <p className="text-[#5C2E0E] text-sm">
+                        Give AI Agent internal knowledge only available to you and your team.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Internal Articles List */}
+                  <div className="ml-12 space-y-2">
+                    <div className="flex items-center justify-between p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3]">
+                      <div className="flex items-center gap-3">
+                        <img src="/favicon.ico" alt="Logo" className="w-6 h-6" />
+                        <div>
+                          <span className="text-[#3C1810] font-medium">Handle Bar</span>
+                          <span className="text-[#5C2E0E] text-sm ml-2">{internalArticles.length} articles</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <IconCheck size={16} className="text-[#8B4513]" />
+                        <button 
+                          onClick={() => handleOpenModal('internal')}
+                          className="px-3 py-1 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded border border-[#8B4513]"
+                        >
+                          Add article
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
