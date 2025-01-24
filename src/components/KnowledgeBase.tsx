@@ -389,6 +389,18 @@ const KnowledgeBase = () => {
     };
   }, [selectedOrg]);
 
+  // Add this near the top of your KnowledgeBase component
+  useEffect(() => {
+    // Get the section from URL query parameters
+    const params = new URLSearchParams(window.location.search);
+    const section = params.get('section');
+    
+    // If section is specified, set it
+    if (section) {
+      setSelectedSection(section);
+    }
+  }, []);
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     navigate('/signin');
@@ -861,6 +873,7 @@ const KnowledgeBase = () => {
             </button>
             
             <button 
+              onClick={() => navigate('/knowledge/help')}
               className="w-full text-left px-3 py-2 rounded text-[#3C1810] hover:bg-[#F5E6D3] flex items-center gap-2"
             >
               Help Center

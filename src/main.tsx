@@ -8,6 +8,9 @@ import SignUp from './components/SignUp'
 import Dashboard from './components/Dashboard'
 import Chanel from './components/Chanel'
 import KnowledgeBase from './components/KnowledgeBase'
+import HelpCenterView from './components/HelpCenterView'
+import Preview from './components/Preview'
+import CollectionView from './components/CollectionView'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -18,6 +21,9 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/signup" element={<SignUp />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/knowledge" element={<KnowledgeBase />} />
+        <Route path="/knowledge/help" element={<HelpCenterView />} />
+        <Route path="/knowledge/help/preview" element={<Preview />} />
+        <Route path="/knowledge/help/preview/collection/:id" element={<CollectionView />} />
         <Route path="/chanel" element={<Chanel />} />
       </Routes>
     </BrowserRouter>
