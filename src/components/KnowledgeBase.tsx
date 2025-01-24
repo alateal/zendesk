@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
 import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
 import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
@@ -15,6 +15,7 @@ import IconLock from '@tabler/icons-react/dist/esm/icons/IconLock';
 import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
 import IconX from '@tabler/icons-react/dist/esm/icons/IconX';
 import IconMaximize from '@tabler/icons-react/dist/esm/icons/IconMaximize';
+import IconFilter from '@tabler/icons-react/dist/esm/icons/IconFilter';
 
 type Article = {
   id: string;
@@ -75,6 +76,8 @@ const KnowledgeBase = () => {
   const [selectedOrg, setSelectedOrg] = useState<string | null>(null);
   const [selectedSection, setSelectedSection] = useState('sources');
   const [isNewContentModalOpen, setIsNewContentModalOpen] = useState(false);
+  const [newConversationsCount, setNewConversationsCount] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Handle click outside profile dropdown
   useEffect(() => {
@@ -143,7 +146,7 @@ const KnowledgeBase = () => {
     fetchOrganizations();
   }, []);
 
-  // Add this useEffect for initial fetch and real-time updates
+  // Update the real-time subscription useEffect
   useEffect(() => {
     if (!selectedOrg) return;
 
@@ -156,7 +159,8 @@ const KnowledgeBase = () => {
           created_by_user:users!articles_created_by_fkey(display_name),
           last_updated_by_user:users!articles_last_updated_by_fkey(display_name)
         `)
-        .eq('organizations_id', selectedOrg);
+        .eq('organizations_id', selectedOrg)
+        .order('created_at', { ascending: false });
 
       if (error) {
         console.error('Error fetching articles:', error);
@@ -172,26 +176,114 @@ const KnowledgeBase = () => {
     fetchArticles();
 
     // Set up real-time subscription
-    const subscription = supabase
+    const channel = supabase
       .channel('articles_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'articles',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          console.log('INSERT received:', payload);
+          const newArticle = payload.new as Article;
+          if (newArticle.is_public) {
+            setPublicArticles(prev => [newArticle, ...prev]);
+          } else {
+            setInternalArticles(prev => [newArticle, ...prev]);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'articles',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          console.log('UPDATE received:', payload);
+          const updatedArticle = payload.new as Article;
+          
+          // Handle public/internal status change and update both arrays
+          setPublicArticles(prev => {
+            const filtered = prev.filter(article => article.id !== updatedArticle.id);
+            return updatedArticle.is_public ? [updatedArticle, ...filtered] : filtered;
+          });
+          
+          setInternalArticles(prev => {
+            const filtered = prev.filter(article => article.id !== updatedArticle.id);
+            return !updatedArticle.is_public ? [updatedArticle, ...filtered] : filtered;
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'articles',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          console.log('DELETE received:', payload);
+          const deletedArticle = payload.old as Article;
+          setPublicArticles(prev => prev.filter(article => article.id !== deletedArticle.id));
+          setInternalArticles(prev => prev.filter(article => article.id !== deletedArticle.id));
+        }
+      )
+      .subscribe((status) => {
+        console.log('Subscription status:', status);
+      });
+
+    return () => {
+      console.log('Cleaning up subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [selectedOrg]);
+
+  // Add useEffect to keep inbox count updated
+  useEffect(() => {
+    if (!selectedOrg) return;
+
+    const fetchInboxCount = async () => {
+      const { data: activeConversations, error } = await supabase
+        .from('conversations')
+        .select('id, status')
+        .eq('organizations_id', selectedOrg)
+        .in('status', ['New', 'Active']);
+
+      if (error) {
+        console.error('Error fetching inbox count:', error);
+        return;
+      }
+
+      setNewConversationsCount(activeConversations?.length || 0);
+    };
+
+    fetchInboxCount();
+
+    const channel = supabase
+      .channel('inbox_count_knowledge')
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
-          table: 'articles',
+          table: 'conversations',
           filter: `organizations_id=eq.${selectedOrg}`
         },
-        async (payload) => {
-          console.log('Real-time update:', payload);
-          // Refetch all articles when there's any change
-          await fetchArticles();
+        () => {
+          fetchInboxCount();
         }
       )
       .subscribe();
 
     return () => {
-      subscription.unsubscribe();
+      channel.unsubscribe();
     };
   }, [selectedOrg]);
 
@@ -225,55 +317,82 @@ const KnowledgeBase = () => {
     return date.toLocaleString();
   };
 
-  // Update the handleCreateArticle function
+  // Update handleCreateArticle to fix the single() error
   const handleCreateArticle = async (publish: boolean = false) => {
-    if (!selectedOrg || !currentUser) return;
+    if (!selectedOrg || !currentUser) {
+      console.error('Missing required data:', { selectedOrg, currentUser });
+      alert('Missing required organization or user data');
+      return;
+    }
 
     try {
-      const newArticle = {
+      const articleToSave = {
         organizations_id: selectedOrg,
-        title: articleData.title,
+        title: articleData.title || `Untitled ${articleModalType} article`,
         description: articleData.description,
         content: articleData.content,
-        created_by: currentUser.id,
         is_public: articleModalType === 'public',
         is_published: publish,
-        created_at: new Date().toISOString(),
         last_updated_at: new Date().toISOString(),
         last_updated_by: currentUser.id,
         enabled_ai: articleData.enabled_ai
       };
 
-      const { data, error } = await supabase
-        .from('articles')
-        .insert([newArticle])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Close modal after successful creation
-      setArticleModalType(null);
+      let response;
       
-      // Clear form
-      setArticleData({
-        id: '',
-        created_at: new Date().toISOString(),
-        organizations_id: selectedOrg,
-        title: '',
-        description: '',
-        content: '',
-        is_public: true,
-        is_published: false,
-        last_updated_at: null,
-        last_updated_by: null,
-        created_by: currentUser.id,
-        enabled_ai: false
-      });
+      if (articleData.id) {
+        // Update existing article
+        response = await supabase
+          .from('articles')
+          .update(articleToSave)
+          .eq('id', articleData.id)
+          .select();  // Remove .single()
+      } else {
+        // Create new article
+        response = await supabase
+          .from('articles')
+          .insert([{
+            ...articleToSave,
+            created_at: new Date().toISOString(),
+            created_by: currentUser.id,
+          }])
+          .select();  // Remove .single()
+      }
+
+      const { data, error } = response;
+
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
+
+      // Log successful operation
+      console.log('Article saved successfully:', data);
+
+      // Check if we have data and it's an array with at least one item
+      if (data && data.length > 0) {
+        setArticleModalType(null);
+        setArticleData({
+          id: '',
+          created_at: new Date().toISOString(),
+          organizations_id: selectedOrg,
+          title: '',
+          description: '',
+          content: '',
+          is_public: true,
+          is_published: false,
+          last_updated_at: null,
+          last_updated_by: null,
+          created_by: currentUser.id,
+          enabled_ai: false
+        });
+      } else {
+        throw new Error('No data returned from the operation');
+      }
 
     } catch (error) {
-      console.error('Error creating article:', error);
-      alert('Failed to create article');
+      console.error('Error saving article:', error);
+      alert('Failed to save article. Please try again.');
     }
   };
 
@@ -281,6 +400,28 @@ const KnowledgeBase = () => {
   const handleNewContentClick = () => {
     setIsNewContentModalOpen(true);
   };
+
+  // Add this function to handle article clicks
+  const handleArticleClick = (article: Article) => {
+    setArticleModalType(article.is_public ? 'public' : 'internal');
+    setArticleData({
+      ...article,
+      title: article.title || `Untitled ${article.is_public ? 'public' : 'internal'} article`
+    });
+  };
+
+  // Add search filter function
+  const filteredArticles = useMemo(() => {
+    const combined = [...publicArticles, ...internalArticles];
+    if (!searchQuery) return combined;
+
+    const query = searchQuery.toLowerCase();
+    return combined.filter(article => 
+      article.title?.toLowerCase().includes(query) ||
+      article.description?.toLowerCase().includes(query) ||
+      article.content?.toLowerCase().includes(query)
+    );
+  }, [publicArticles, internalArticles, searchQuery]);
 
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
@@ -293,9 +434,17 @@ const KnowledgeBase = () => {
         <nav className="flex flex-col space-y-4 flex-1">
           <button
             onClick={() => handleNavigation('inbox')}
-            className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]"
+            className={`p-2 rounded-lg relative ${
+              selectedNav === 'inbox' ? 'text-[#8B4513] bg-[#F5E6D3]' : 'text-[#3C1810] hover:bg-[#F5E6D3]'
+            }`}
           >
-            <IconInbox size={24} />
+            <IconInbox size={20} />
+            {/* Always show the count badge */}
+            {newConversationsCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-[#8B4513] text-[#FDF6E3] text-xs w-4 h-4 flex items-center justify-center rounded-full">
+                {newConversationsCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -469,82 +618,83 @@ const KnowledgeBase = () => {
             </div>
 
             {/* Search and Filters */}
-            <div className="p-4 border-b border-[#8B4513] flex gap-4">
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  placeholder="Search articles..."
-                  className="w-full pl-10 pr-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-                />
-                <IconSearch className="absolute left-3 top-2.5 text-[#8B4513]" size={20} />
-                <button className="absolute right-3 top-2.5 text-[#8B4513] hover:text-[#5C2E0E]">
-                  <IconX size={20} />
+            <div className="p-6">
+              {/* Search Bar and Filter Button */}
+              <div className="flex items-center gap-4 mb-6">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search content..."
+                    className="w-full pl-10 pr-4 py-2.5 bg-[#F5E6D3] border border-[#8B4513] rounded-lg text-[#3C1810] placeholder-[#8B6B4D] focus:outline-none focus:ring-1 focus:ring-[#8B4513]"
+                  />
+                  <IconSearch 
+                    size={20} 
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8B6B4D]" 
+                  />
+                </div>
+                <button className="p-2.5 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg">
+                  <IconFilter size={20} />
                 </button>
               </div>
-              <button className="flex items-center gap-2 px-4 py-2 border border-[#8B4513] rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
-                <IconArticle size={20} />
-                Type is Public article
-              </button>
-              <button className="px-4 py-2 border border-[#8B4513] rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
-                Filters
-              </button>
-            </div>
 
-            {/* Results Count */}
-            <div className="px-6 py-3 text-[#5C2E0E] flex items-center justify-between border-b border-[#8B4513]">
-              <div className="flex items-center gap-2">
-                <span>{publicArticles.length + internalArticles.length} results</span>
-                <span>in this folder and subfolders</span>
-              </div>
-              <button className="text-[#8B4513] hover:text-[#5C2E0E]">
-                Clear search
-              </button>
-            </div>
-
-            {/* Articles List */}
-            <div className="p-4">
-              <table className="w-full">
-                <thead className="border-b border-[#8B4513]">
-                  <tr>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Title</th>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Type</th>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">AI Agent</th>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Help Center</th>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Help Center collections</th>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Status</th>
-                    <th className="text-left pb-2 text-[#8B6B4D] font-medium">Last updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...publicArticles, ...internalArticles].map(article => (
-                    <tr key={article.id} className="hover:bg-[#F5E6D3] cursor-pointer">
-                      <td className="py-3 text-[#3C1810]">{article.title}</td>
-                      <td className="py-3 text-[#3C1810]">
-                        {article.is_public ? 'Public article' : 'Internal article'}
-                      </td>
-                      <td className="py-3">
-                        <IconCheck className="text-[#8B4513]" size={20} />
-                      </td>
-                      <td className="py-3">
-                        <IconCheck className="text-[#8B4513]" size={20} />
-                      </td>
-                      <td className="py-3 text-[#3C1810]">General</td>
-                      <td className="py-3">
-                        <span className={`px-2 py-1 rounded-full text-sm ${
-                          article.is_published 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-yellow-100 text-yellow-800'
-                        }`}>
-                          {article.is_published ? 'Published' : 'Draft'}
-                        </span>
-                      </td>
-                      <td className="py-3 text-[#8B6B4D] text-sm">
-                        {formatDate(article.last_updated_at || article.created_at)}
-                      </td>
+              {/* Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="border-b border-[#8B4513]">
+                    <tr>
+                      <th className="text-left py-3 pr-6 text-[#8B6B4D] font-medium w-[30%]">Title</th>
+                      <th className="text-left py-3 pr-6 text-[#8B6B4D] font-medium w-[15%]">Type</th>
+                      <th className="text-left py-3 pr-3 text-[#8B6B4D] font-medium w-[10%]">AI Agent</th>
+                      <th className="text-left py-3 pr-3 text-[#8B6B4D] font-medium w-[10%]">Help Center</th>
+                      <th className="text-left py-3 pr-4 text-[#8B6B4D] font-medium w-[10%]">Collections</th>
+                      <th className="text-left py-3 pr-4 text-[#8B6B4D] font-medium w-[12%]">Status</th>
+                      <th className="text-left py-3 text-[#8B6B4D] font-medium w-[13%]">Last updated</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredArticles.map(article => (
+                      <tr 
+                        key={article.id} 
+                        className="hover:bg-[#F5E6D3] cursor-pointer border-b border-[#8B4513] last:border-b-0"
+                        onClick={() => handleArticleClick(article)}
+                      >
+                        <td className="py-4 pr-6 text-[#3C1810]">{article.title}</td>
+                        <td className="py-4 pr-6 text-[#3C1810]">
+                          {article.is_public ? 'Public article' : 'Internal article'}
+                        </td>
+                        <td className="py-4 pr-4">
+                          <IconCheck className="text-[#8B4513]" size={20} />
+                        </td>
+                        <td className="py-4 pr-4">
+                          <IconCheck className="text-[#8B4513]" size={20} />
+                        </td>
+                        <td className="py-4 pr-4 text-[#3C1810]">General</td>
+                        <td className="py-4 pr-4">
+                          <span className={`px-2 py-1 rounded-full text-sm ${
+                            article.is_published 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {article.is_published ? 'Published' : 'Draft'}
+                          </span>
+                        </td>
+                        <td className="py-4 text-[#8B6B4D] text-sm">
+                          {formatDate(article.last_updated_at || article.created_at)}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredArticles.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-6 text-center text-[#5C2E0E]">
+                          No articles found matching your search
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         ) : (
@@ -632,28 +782,6 @@ const KnowledgeBase = () => {
                     </button>
                   </div>
                 </div>
-
-                {/* Published Internal Articles List */}
-                <div className="mt-4 space-y-2">
-                  {internalArticles
-                    .filter(article => article.is_published)
-                    .map(article => (
-                      <div 
-                        key={article.id}
-                        className="p-4 border border-[#8B4513] rounded-lg bg-[#FDF6E3] hover:bg-[#F5E6D3] cursor-pointer"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-[#3C1810] font-medium">{article.title}</h3>
-                            <p className="text-[#5C2E0E] text-sm mt-1">{article.description}</p>
-                          </div>
-                          <div className="text-[#8B6B4D] text-sm">
-                            {formatDate(article.last_updated_at || article.created_at)}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                </div>
               </div>
             </div>
           </div>
@@ -725,7 +853,7 @@ const KnowledgeBase = () => {
           <div className="bg-[#FDF6E3] w-full max-w-5xl h-[90vh] rounded-lg flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 border-b border-[#8B4513]">
-              <h2 className="text-xl font-semibold text-[#3C1810]">
+              <h2 className="text-sm font-semibold text-[#3C1810]">
                 {articleModalType === 'public' ? 'Public article' : 'Internal article'}
               </h2>
               <div className="flex items-center gap-2">
@@ -794,7 +922,7 @@ const KnowledgeBase = () => {
                   <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
                   <div>
                     <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
-                    <div className="flex items-center gap-2 text-2xl text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                    <div className="flex items-center gap-2 text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
                       {articleData.is_public ? (
                         <>
                           <IconArticle size={20} />

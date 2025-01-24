@@ -153,8 +153,6 @@ const Dashboard = () => {
   // Function to load initial messages
   const loadMessages = async (conversationId: string) => {
     try {
-      console.log('Loading messages for conversation:', conversationId);
-      
       const { data, error } = await supabase
         .from('messages')
         .select('*')
@@ -166,7 +164,6 @@ const Dashboard = () => {
         return;
       }
 
-      console.log('Loaded messages:', data);
       if (data) setMessages(data);
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -176,7 +173,6 @@ const Dashboard = () => {
   // Set up real-time subscription when conversation changes
   useEffect(() => {
     if (!selectedApp || !selectedOrg) {
-      console.log('No conversation or organization selected');
       return;
     }
 
@@ -330,7 +326,6 @@ const Dashboard = () => {
       if (conversationsError) throw conversationsError;
 
       if (conversationsData && conversationsData.length > 0) {
-        console.log('Fetched conversations:', conversationsData);
         const conversationsWithMessages = conversationsData.map(conv => {
           const messages = conv.messages || [];
           const sortedMessages = messages.sort((a, b) => 
@@ -357,7 +352,6 @@ const Dashboard = () => {
 
   useEffect(() => {
     if (!selectedOrg) {
-      console.log('No organization selected, skipping subscription setup');
       return;
     }
 
@@ -373,7 +367,6 @@ const Dashboard = () => {
           table: 'conversations'
         },
         (payload) => {
-          console.log('Conversation changed:', payload);
           if (payload.new && payload.new.organizations_id === selectedOrg) {
             fetchConversations();
           }
@@ -387,7 +380,6 @@ const Dashboard = () => {
           table: 'messages'
         },
         (payload) => {
-          console.log('Message inserted:', payload);
           if (payload.new && payload.new.organizations_id === selectedOrg) {
             fetchConversations();
           }
@@ -410,7 +402,6 @@ const Dashboard = () => {
       return null;
     }
     if (!session) {
-      console.log('No session found');
       return null;
     }
     return session;
@@ -427,7 +418,6 @@ const Dashboard = () => {
       }
 
       const { data: userData, error: authError } = await supabase.auth.getUser();
-      console.log('Auth response:', userData);
 
       if (authError) {
         console.error('Auth error:', authError);
@@ -455,8 +445,6 @@ const Dashboard = () => {
         .select('*')
         .single();
 
-      console.log('Conversation creation result:', { data: conversationData, error: conversationError });
-
       if (conversationError) {
         console.error('Error creating conversation:', conversationError);
         return;
@@ -478,8 +466,6 @@ const Dashboard = () => {
           ])
           .select('*')
           .single();
-
-        console.log('Message creation result:', { data: messageData, error: messageError });
 
         if (messageError) {
           console.error('Error creating initial message:', messageError);
@@ -583,9 +569,46 @@ const Dashboard = () => {
 
   // Add useEffect to count new conversations
   useEffect(() => {
-    const newCount = conversations.filter(conv => conv.status === 'New' || conv.status === 'Active').length;
-    setNewConversationsCount(newCount);
-  }, [conversations]);
+    const fetchInboxCount = async () => {
+      if (!selectedOrg) return;
+
+      const { data: activeConversations, error } = await supabase
+        .from('conversations')
+        .select('id, status')
+        .eq('organizations_id', selectedOrg)
+        .in('status', ['New', 'Active']);
+
+      if (error) {
+        console.error('Error fetching inbox count:', error);
+        return;
+      }
+
+      setNewConversationsCount(activeConversations.length);
+    };
+
+    fetchInboxCount();
+
+    // Set up real-time subscription for count updates
+    const channel = supabase
+      .channel('inbox_count')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'conversations',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        () => {
+          fetchInboxCount();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [selectedOrg]);
 
   // Add useEffect for real-time conversation updates
   useEffect(() => {
@@ -691,7 +714,6 @@ const Dashboard = () => {
           filter: `organizations_id=eq.${selectedOrg}`
         },
         (payload) => {
-          console.log('Satisfaction update received:', payload);
           // Fetch fresh data when a rating is updated
           fetchConversations();
         }
@@ -760,19 +782,12 @@ const Dashboard = () => {
   // Update the useEffect for fetching users
   useEffect(() => {
     if (selectedOrg) {
-      console.log('Fetching users for organization:', selectedOrg);
       fetchUsers();
     }
   }, [selectedOrg]); // Fetch users when organization changes
 
   // Remove the users fetch from handleAssigneeClick
   const handleAssigneeClick = () => {
-    console.log('Dropdown clicked. Current state:', {
-      isAssigneeOpen: isAssigneeOpen,
-      selectedOrg: selectedOrg,
-      currentUserRole: currentUserRole
-    });
-    
     setIsAssigneeOpen(!isAssigneeOpen);
   };
 
@@ -801,7 +816,6 @@ const Dashboard = () => {
   const checkUserRole = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      console.log('Current auth user:', user);
       
       if (!user) return;
 
@@ -813,7 +827,6 @@ const Dashboard = () => {
 
       if (error) throw error;
       
-      console.log('User role data:', userData);
       setCurrentUserRole(userData?.role_id || null);
     } catch (error) {
       console.error('Error checking user role:', error);
@@ -892,6 +905,7 @@ const Dashboard = () => {
             }`}
           >
             <IconInbox size={20} />
+            {/* Always show the count badge */}
             {newConversationsCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-[#8B4513] text-[#FDF6E3] text-xs w-4 h-4 flex items-center justify-center rounded-full">
                 {newConversationsCount}
@@ -1038,7 +1052,7 @@ const Dashboard = () => {
             <div className="mb-4">
               <div className="flex items-center gap-2 px-3 py-2">
                 <IconInbox size={20} className="text-[#8B4513]" />
-                <span className="text-sm font-medium text-[#3C1810]">Inbox</span>
+                <span className="text-sm font-medium text-[#3C1810]">Your Inbox</span>
                 {newConversationsCount > 0 && (
                   <span className="ml-auto bg-[#8B4513] text-[#FDF6E3] text-xs px-2 py-0.5 rounded-full">
                     {conversations.filter(conv => 
@@ -1053,21 +1067,17 @@ const Dashboard = () => {
                   <span className="text-xs text-[#5C2E0E]">0</span>
                 </button>
                 <button className="w-full text-left px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded flex items-center justify-between">
-                  <span>Created by you</span>
-                  <span className="text-xs text-[#5C2E0E]">
-                    {conversations.filter(conv => 
-                      conv.assigned_to === currentUser?.id && 
-                      (conv.status === 'New' || conv.status === 'Active')
-                    ).length}
-                  </span>
-                </button>
-                <button className="w-full text-left px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded flex items-center justify-between">
                   <span>Unassigned</span>
                   <span className="text-xs text-[#5C2E0E]">
-                    {conversations.filter(conv => 
-                      !conv.is_assigned && 
-                      (conv.status === 'New' || conv.status === 'Active')
-                    ).length}
+                    {(() => {
+                      const unassignedConvs = conversations.filter(conv => {
+                        return (
+                          !conv.assigned_to && 
+                          (conv.status === 'New' || conv.status === 'Active')
+                        );
+                      });
+                      return unassignedConvs.length;
+                    })()}
                   </span>
                 </button>
               </div>
@@ -1119,7 +1129,7 @@ const Dashboard = () => {
       <div className="w-80 border-r border-[#8B4513] flex flex-col">
         {/* Header */}
         <div className="p-6 border-b border-[#8B4513]">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between h-9">
             <div className="flex flex-col">
               <h2 className="text-xl font-semibold text-[#3C1810]">
                 {organizations.find(org => org.id === selectedOrg)?.name || 'Loading...'}
@@ -1236,20 +1246,19 @@ const Dashboard = () => {
           {/* Messages */}
           <div className="flex-1 p-6 overflow-y-auto bg-[#FDF6E3]">
           {messages.length === 0 ? (
-              <div className="bg-[#F5E6D3] rounded-lg border border-[#8B4513] p-6 max-w-2xl mx-auto">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="bg-[#8B4513] text-[#FDF6E3] px-3 py-1 rounded-full text-sm">
-                  Demo Message
-                </div>
+              <div className="flex flex-col items-center justify-center h-full">
+                <img 
+                  src="/mustache.png" 
+                  alt="Mustache" 
+                  className="w-32 h-32 opacity-90"
+                />
+                <p className="text-[#3C1810] mb-6 text-center text-lg">
+                  Ready to put on your mustache?
+                </p>
+                <p className="text-[#5C2E0E] mb-4 text-center text-sm">
+                  Choose a conversation to start helping your customer.
+                </p>
               </div>
-              <p className="text-[#3C1810] mb-4">
-                Choose a conversation to start helping your customer.
-              </p>
-              <p className="text-[#5C2E0E] text-sm">
-                Once a channel is set up, all conversations come straight to your Inbox, 
-                so you can route them to the right team.
-              </p>
-            </div>
           ) : (
             <div className="space-y-4">
               {messages.map((msg) => (
