@@ -74,3 +74,12 @@
 - **last_updated_by**: `uuid` (Foreign Key to `users.id`)
 - **created_by**: `uuid` (Foreign Key to `users.id`)
 - **enabled_ai**: `boolean`
+- **collection_id**: `uuid` (Foreign Key to `collections.id`)
+
+---
+
+## `collections`
+- **id**: `uuid` (Primary Key)
+- **created_at**: `timestamptz`
+- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
+- **title**: `text`

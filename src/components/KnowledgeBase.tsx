@@ -14,7 +14,7 @@ import IconLock from '@tabler/icons-react/dist/esm/icons/IconLock';
 import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
 import IconX from '@tabler/icons-react/dist/esm/icons/IconX';
 import IconMaximize from '@tabler/icons-react/dist/esm/icons/IconMaximize';
-import IconFilter from '@tabler/icons-react/dist/esm/icons/IconFilter';
+import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
 
 type Article = {
   id: string;
@@ -29,6 +29,11 @@ type Article = {
   last_updated_by: string | null;
   created_by: string;
   enabled_ai: boolean;
+  collection_id?: string;
+  collections?: {
+    id: string;
+    title: string;
+  };
 };
 
 const getCurrentUser = async () => {
@@ -68,7 +73,8 @@ const KnowledgeBase = () => {
     last_updated_at: null,
     last_updated_by: null,
     created_by: currentUser?.id || '',
-    enabled_ai: false
+    enabled_ai: false,
+    collection_id: '',
   });
   const [publicArticles, setPublicArticles] = useState<Article[]>([]);
   const [internalArticles, setInternalArticles] = useState<Article[]>([]);
@@ -77,6 +83,44 @@ const KnowledgeBase = () => {
   const [isNewContentModalOpen, setIsNewContentModalOpen] = useState(false);
   const [newConversationsCount, setNewConversationsCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [collections, setCollections] = useState<Array<{ id: string; name: string }>>([]);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isCreateCollectionModalOpen, setIsCreateCollectionModalOpen] = useState(false);
+  const [newCollection, setNewCollection] = useState({
+    title: ''
+  });
+  const [collectionError, setCollectionError] = useState<string | null>(null);
+
+  // Add authentication check
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error || !session) {
+          console.error('Auth error:', error);
+          navigate('/signin');
+          return;
+        }
+
+        // Set up auth state change listener
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+          if (!session) {
+            navigate('/signin');
+          }
+        });
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      } catch (error) {
+        console.error('Auth check error:', error);
+        navigate('/signin');
+      }
+    };
+
+    checkAuth();
+  }, [navigate]);
 
   // Handle click outside profile dropdown
   useEffect(() => {
@@ -156,7 +200,11 @@ const KnowledgeBase = () => {
         .select(`
           *,
           created_by_user:users!articles_created_by_fkey(display_name),
-          last_updated_by_user:users!articles_last_updated_by_fkey(display_name)
+          last_updated_by_user:users!articles_last_updated_by_fkey(display_name),
+          collections:collection_id (
+            id,
+            title
+          )
         `)
         .eq('organizations_id', selectedOrg)
         .order('created_at', { ascending: false });
@@ -180,63 +228,52 @@ const KnowledgeBase = () => {
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*',
           schema: 'public',
           table: 'articles',
           filter: `organizations_id=eq.${selectedOrg}`
         },
-        (payload) => {
-          console.log('INSERT received:', payload);
-          const newArticle = payload.new as Article;
-          if (newArticle.is_public) {
-            setPublicArticles(prev => [newArticle, ...prev]);
-          } else {
-            setInternalArticles(prev => [newArticle, ...prev]);
+        async (payload) => {
+          // When an article is updated or inserted, fetch its collection data
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const { data: article } = await supabase
+              .from('articles')
+              .select(`
+                *,
+                created_by_user:users!articles_created_by_fkey(display_name),
+                last_updated_by_user:users!articles_last_updated_by_fkey(display_name),
+                collections:collection_id (
+                  id,
+                  title
+                )
+              `)
+              .eq('id', payload.new.id)
+              .single();
+
+            if (article) {
+              if (article.is_public) {
+                setPublicArticles(prev => {
+                  const filtered = prev.filter(a => a.id !== article.id);
+                  return [article, ...filtered];
+                });
+              } else {
+                setInternalArticles(prev => {
+                  const filtered = prev.filter(a => a.id !== article.id);
+                  return [article, ...filtered];
+                });
+              }
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const deletedArticle = payload.old;
+            if (deletedArticle.is_public) {
+              setPublicArticles(prev => prev.filter(a => a.id !== deletedArticle.id));
+            } else {
+              setInternalArticles(prev => prev.filter(a => a.id !== deletedArticle.id));
+            }
           }
         }
       )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'articles',
-          filter: `organizations_id=eq.${selectedOrg}`
-        },
-        (payload) => {
-          console.log('UPDATE received:', payload);
-          const updatedArticle = payload.new as Article;
-          
-          // Handle public/internal status change and update both arrays
-          setPublicArticles(prev => {
-            const filtered = prev.filter(article => article.id !== updatedArticle.id);
-            return updatedArticle.is_public ? [updatedArticle, ...filtered] : filtered;
-          });
-          
-          setInternalArticles(prev => {
-            const filtered = prev.filter(article => article.id !== updatedArticle.id);
-            return !updatedArticle.is_public ? [updatedArticle, ...filtered] : filtered;
-          });
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'articles',
-          filter: `organizations_id=eq.${selectedOrg}`
-        },
-        (payload) => {
-          console.log('DELETE received:', payload);
-          const deletedArticle = payload.old as Article;
-          setPublicArticles(prev => prev.filter(article => article.id !== deletedArticle.id));
-          setInternalArticles(prev => prev.filter(article => article.id !== deletedArticle.id));
-        }
-      )
-      .subscribe((status) => {
-        console.log('Subscription status:', status);
-      });
+      .subscribe();
 
     return () => {
       console.log('Cleaning up subscription');
@@ -283,6 +320,72 @@ const KnowledgeBase = () => {
 
     return () => {
       channel.unsubscribe();
+    };
+  }, [selectedOrg]);
+
+  // Add this useEffect to fetch and subscribe to collections
+  useEffect(() => {
+    if (!selectedOrg) return;
+
+    // Initial fetch of collections
+    const fetchCollections = async () => {
+      const { data: collections, error } = await supabase
+        .from('collections')
+        .select('id, title')
+        .eq('organizations_id', selectedOrg)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching collections:', error);
+        return;
+      }
+
+      if (collections) {
+        setCollections(collections.map(c => ({ id: c.id, name: c.title })));
+      }
+    };
+
+    fetchCollections();
+
+    // Set up real-time subscription
+    const channel = supabase
+      .channel('collections_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'collections',
+          filter: `organizations_id=eq.${selectedOrg}`
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newCollection = payload.new;
+            setCollections(prev => [{
+              id: newCollection.id,
+              name: newCollection.title
+            }, ...prev]);
+          } else if (payload.eventType === 'DELETE') {
+            const deletedCollection = payload.old;
+            setCollections(prev => 
+              prev.filter(c => c.id !== deletedCollection.id)
+            );
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedCollection = payload.new;
+            setCollections(prev => 
+              prev.map(c => 
+                c.id === updatedCollection.id 
+                  ? { id: updatedCollection.id, name: updatedCollection.title }
+                  : c
+              )
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
     };
   }, [selectedOrg]);
 
@@ -358,25 +461,22 @@ const KnowledgeBase = () => {
     return `${years} ${years === 1 ? 'year' : 'years'} ago`;
   };
 
-  // Update handleCreateArticle to fix the single() error
+  // Update handleCreateArticle to handle both creation and updates
   const handleCreateArticle = async (publish: boolean = false) => {
-    if (!selectedOrg || !currentUser) {
-      console.error('Missing required data:', { selectedOrg, currentUser });
-      alert('Missing required organization or user data');
-      return;
-    }
-
     try {
+      if (!selectedOrg || !currentUser) return;
+
       const articleToSave = {
         organizations_id: selectedOrg,
-        title: articleData.title || `Untitled ${articleModalType} article`,
+        title: articleData.title,
         description: articleData.description,
         content: articleData.content,
         is_public: articleModalType === 'public',
         is_published: publish,
         last_updated_at: new Date().toISOString(),
         last_updated_by: currentUser.id,
-        enabled_ai: articleData.enabled_ai
+        enabled_ai: articleData.enabled_ai,
+        collection_id: articleData.collection_id || null
       };
 
       let response;
@@ -387,68 +487,73 @@ const KnowledgeBase = () => {
           .from('articles')
           .update(articleToSave)
           .eq('id', articleData.id)
-          .select();  // Remove .single()
+          .select(`
+            *,
+            created_by_user:users!articles_created_by_fkey(display_name),
+            last_updated_by_user:users!articles_last_updated_by_fkey(display_name),
+            collections:collection_id (
+              id,
+              title
+            )
+          `)
+          .single();
       } else {
         // Create new article
         response = await supabase
           .from('articles')
           .insert([{
             ...articleToSave,
-            created_at: new Date().toISOString(),
             created_by: currentUser.id,
           }])
-          .select();  // Remove .single()
+          .select(`
+            *,
+            created_by_user:users!articles_created_by_fkey(display_name),
+            last_updated_by_user:users!articles_last_updated_by_fkey(display_name),
+            collections:collection_id (
+              id,
+              title
+            )
+          `)
+          .single();
       }
 
-      const { data, error } = response;
+      const { data: article, error } = response;
+      if (error) throw error;
 
-      if (error) {
-        console.error('Supabase error:', error);
-        throw error;
-      }
-
-      // Log successful operation
-      console.log('Article saved successfully:', data);
-
-      // Check if we have data and it's an array with at least one item
-      if (data && data.length > 0) {
-        setArticleModalType(null);
-        setArticleData({
-          id: '',
-          created_at: new Date().toISOString(),
-          organizations_id: selectedOrg,
-          title: '',
-          description: '',
-          content: '',
-          is_public: true,
-          is_published: false,
-          last_updated_at: null,
-          last_updated_by: null,
-          created_by: currentUser.id,
-          enabled_ai: false
-        });
-      } else {
-        throw new Error('No data returned from the operation');
-      }
+      // Close the modal
+      setArticleModalType(null);
+      
+      // Reset the form
+      setArticleData({
+        id: '',
+        created_at: new Date().toISOString(),
+        organizations_id: selectedOrg,
+        title: '',
+        description: '',
+        content: '',
+        is_public: true,
+        is_published: false,
+        last_updated_at: null,
+        last_updated_by: null,
+        created_by: currentUser.id,
+        enabled_ai: false,
+        collection_id: '',
+      });
 
     } catch (error) {
       console.error('Error saving article:', error);
-      alert('Failed to save article. Please try again.');
     }
+  };
+
+  // Update the handleArticleClick function to load article data
+  const handleArticleClick = (article: Article) => {
+    setArticleData(article);
+    setArticleModalType(article.is_public ? 'public' : 'internal');
   };
 
   // Add handler for new content button
   const handleNewContentClick = () => {
     setIsNewContentModalOpen(true);
-  };
-
-  // Add this function to handle article clicks
-  const handleArticleClick = (article: Article) => {
-    setArticleModalType(article.is_public ? 'public' : 'internal');
-    setArticleData({
-      ...article,
-      title: article.title || `Untitled ${article.is_public ? 'public' : 'internal'} article`
-    });
   };
 
   // Add search filter function
@@ -463,6 +568,136 @@ const KnowledgeBase = () => {
       article.content?.toLowerCase().includes(query)
     );
   }, [publicArticles, internalArticles, searchQuery]);
+
+  const handleCollectionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    if (value === 'new') {
+      // Handle creating new collection
+      // You could open another modal or implement your preferred UI for collection creation
+      handleCreateNewCollection();
+    } else {
+      setArticleData({ ...articleData, collection_id: value });
+    }
+  };
+
+  const handleCreateNewCollection = async () => {
+    setIsCreateCollectionModalOpen(true);
+  };
+
+  const handleSaveCollection = async () => {
+    try {
+      if (!selectedOrg) return;
+      
+      setCollectionError(null); // Reset error state
+
+      // First check if collection with same title exists
+      const { data: existingCollections, error: searchError } = await supabase
+        .from('collections')
+        .select('id, title')
+        .eq('organizations_id', selectedOrg)
+        .ilike('title', newCollection.title)
+        .single();
+
+      if (searchError && searchError.code !== 'PGRST116') { // PGRST116 means no rows returned
+        throw searchError;
+      }
+
+      if (existingCollections) {
+        // Collection exists - set it as selected and show message
+        setArticleData(prev => ({
+          ...prev,
+          collection_id: existingCollections.id
+        }));
+
+        setCollectionError(`Collection "${existingCollections.title}" already exists and has been selected`);
+        
+        // Don't close modal immediately to show the message
+        setTimeout(() => {
+          setIsCreateCollectionModalOpen(false);
+          setIsDropdownOpen(false);
+          setCollectionError(null);
+        }, 2000);
+
+        return;
+      }
+
+      // If no existing collection, create new one
+      const { data: collectionData, error: collectionError } = await supabase
+        .from('collections')
+        .insert([{
+          title: newCollection.title,
+          organizations_id: selectedOrg
+        }])
+        .select()
+        .single();
+
+      if (collectionError) throw collectionError;
+
+      // Add new collection to local state
+      setCollections(prev => [...prev, {
+        id: collectionData.id,
+        name: collectionData.title
+      }]);
+
+      // Set the new collection as selected
+      setArticleData(prev => ({
+        ...prev,
+        collection_id: collectionData.id
+      }));
+
+      // Close modals
+      setIsCreateCollectionModalOpen(false);
+      setIsDropdownOpen(false);
+
+      // Reset new collection form
+      setNewCollection({
+        title: ''
+      });
+
+    } catch (error) {
+      console.error('Error creating collection:', error);
+      setCollectionError('Error creating collection. Please try again.');
+    }
+  };
+
+  // Add this effect to close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!event.target) return;
+      const target = event.target as HTMLElement;
+      if (!target.closest('.relative')) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  const renderArticleList = (articles: Article[]) => {
+    return articles.map(article => (
+      <div key={article.id} className="flex items-center gap-4 p-4 border-b border-[#8B4513] hover:bg-[#F5E6D3]">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-base font-medium text-[#3C1810]">
+              {article.title}
+            </h3>
+            {article.collections && (
+              <span className="text-xs text-[#8B6B4D] bg-[#F5E6D3] px-2 py-1 rounded">
+                {article.collections.title}
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-[#5C2E0E]">{article.description}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Your existing action buttons */}
+        </div>
+      </div>
+    ));
+  };
 
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
@@ -643,12 +878,6 @@ const KnowledgeBase = () => {
               <div className="flex items-center justify-between h-9">
                 <h1 className="text-xl font-semibold text-[#3C1810]">Content</h1>
                 <div className="flex items-center gap-2">
-                  <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
-                    Content reporting
-                  </button>
-                  <button className="px-4 py-2 text-[#3C1810] border border-[#8B4513] rounded-lg hover:bg-[#F5E6D3]">
-                    New folder
-                  </button>
                   <button 
                     onClick={handleNewContentClick}
                     className="bg-[#8B4513] text-[#FDF6E3] px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#5C2E0E]"
@@ -677,48 +906,64 @@ const KnowledgeBase = () => {
                     className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8B6B4D]" 
                   />
                 </div>
-                <button className="p-2.5 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg">
-                  <IconFilter size={20} />
-                </button>
               </div>
 
               {/* Table */}
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="border-b border-[#8B4513]">
-                    <tr>
-                      <th className="text-left py-3 pr-6 text-[#8B6B4D] font-medium w-[30%]">Title</th>
-                      <th className="text-left py-3 pr-6 text-[#8B6B4D] font-medium w-[15%]">Type</th>
-                      <th className="text-left py-3 pr-3 text-[#8B6B4D] font-medium w-[10%]">AI Agent</th>
-                      <th className="text-left py-3 pr-3 text-[#8B6B4D] font-medium w-[10%]">Help Center</th>
-                      <th className="text-left py-3 pr-4 text-[#8B6B4D] font-medium w-[10%]">Collections</th>
-                      <th className="text-left py-3 pr-4 text-[#8B6B4D] font-medium w-[12%]">Status</th>
-                      <th className="text-left py-3 text-[#8B6B4D] font-medium w-[13%]">Last updated</th>
+                    <tr className="text-left text-xs text-[#8B6B4D]">
+                      <th className="text-left py-3 pr-6 font-medium w-[30%]">Title</th>
+                      <th className="text-left py-3 pr-6 font-medium w-[15%]">Type</th>
+                      <th className="text-left py-3 pr-3 font-medium w-[10%]">AI Agent</th>
+                      <th className="text-left py-3 pr-3 font-medium w-[10%]">Help Center</th>
+                      <th className="text-left py-3 pr-4 font-medium w-[10%]">Collections</th>
+                      <th className="text-left py-3 pr-4 font-medium w-[12%]">Status</th>
+                      <th className="text-left py-3 font-medium w-[13%]">Last updated</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredArticles.map(article => (
+                    {filteredArticles.map((article) => (
                       <tr 
                         key={article.id} 
                         className="hover:bg-[#F5E6D3] cursor-pointer border-b border-[#8B4513] last:border-b-0"
                         onClick={() => handleArticleClick(article)}
                       >
-                        <td className="py-4 pr-6 text-[#3C1810]">{article.title}</td>
-                        <td className="py-4 pr-6 text-[#3C1810]">
+                        <td className="py-4 pr-6">
+                          <div className="flex items-center gap-2">
+                            <IconArticle 
+                              size={18} 
+                              className="text-[#8B4513] shrink-0" 
+                              stroke={1.5}
+                            />
+                            <span className="text-[#3C1810]">{article.title}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 pr-6 text-[#3C1810] text-sm">
                           {article.is_public ? 'Public article' : 'Internal article'}
                         </td>
                         <td className="py-4 pr-4">
-                          <IconCheck className="text-[#8B4513]" size={20} />
+                          {article.enabled_ai ? (
+                            <IconCheck size={18} className="text-[#8B4513]" />
+                          ) : (
+                            <IconX size={18} className="text-[#8B6B4D]" />
+                          )}
                         </td>
                         <td className="py-4 pr-4">
-                          <IconCheck className="text-[#8B4513]" size={20} />
+                          {article.is_public ? (
+                            <IconCheck size={18} className="text-[#8B4513]" />
+                          ) : (
+                            <IconX size={18} className="text-[#8B6B4D]" />
+                          )}
                         </td>
-                        <td className="py-4 pr-4 text-[#3C1810]">General</td>
+                        <td className="py-4 pr-4 text-[#3C1810] text-sm">
+                          {article.collections?.title || 'Uncategorized'}
+                        </td>
                         <td className="py-4 pr-4">
                           <span className={`px-2 py-1 rounded-full text-sm ${
                             article.is_published 
-                              ? 'bg-green-100 text-green-800' 
-                              : 'bg-yellow-100 text-yellow-800'
+                              ? 'bg-[#DCC0A3] text-[#5C2E0E]' 
+                              : 'bg-[#F5E6D3] text-[#8B6B4D]'
                           }`}>
                             {article.is_published ? 'Published' : 'Draft'}
                           </span>
@@ -902,8 +1147,8 @@ const KnowledgeBase = () => {
       {articleModalType && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-[#FDF6E3] w-full max-w-5xl h-[90vh] rounded-lg flex flex-col">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b border-[#8B4513]">
+            {/* Modal Header - Keep fixed */}
+            <div className="flex items-center justify-between p-4 border-b border-[#8B4513] shrink-0">
               <h2 className="text-sm font-semibold text-[#3C1810]">
                 {articleModalType === 'public' ? 'Public article' : 'Internal article'}
               </h2>
@@ -938,10 +1183,10 @@ const KnowledgeBase = () => {
               </div>
             </div>
 
-            {/* Modal Content */}
-            <div className="flex flex-1">
+            {/* Modal Content - Make scrollable */}
+            <div className="flex flex-1 overflow-hidden">
               {/* Editor Section */}
-              <div className="flex-1 p-6 border-r border-[#8B4513]">
+              <div className="flex-1 overflow-y-auto p-6 border-r border-[#8B4513]">
                 <input
                   type="text"
                   value={articleData.title}
@@ -965,96 +1210,240 @@ const KnowledgeBase = () => {
               </div>
 
               {/* Details Sidebar */}
-              <div className="w-80 p-6 flex flex-col h-full">
-                <h3 className="text-base font-semibold text-[#3C1810] mb-4">Details</h3>
-                {/* Make the content area scrollable */}
-                <div className="space-y-4 overflow-y-auto flex-1">
-                  {/* Data Section - Reduce font sizes */}
-                  <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
-                    <div className="flex items-center gap-2 text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
-                      {articleData.is_public ? (
-                        <>
-                          <IconArticle size={20} />
-                          <span>Public article</span>
-                        </>
-                      ) : (
-                        <>
-                          <IconLock size={20} />
-                          <span>Internal article</span>
-                        </>
-                      )}
+              <div className="w-80 flex flex-col overflow-hidden">
+                {/* Details Header */}
+                <div className="p-6 border-b border-[#8B4513] shrink-0">
+                  <h3 className="text-base font-semibold text-[#3C1810]">Details</h3>
+                </div>
+                
+                {/* Scrollable Content */}
+                <div className="flex-1 overflow-y-auto p-6">
+                  <div className="space-y-4">
+                    {/* Data Section */}
+                    <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
+                      <div className="flex items-center gap-2 text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                        {articleData.is_public ? (
+                          <>
+                            <IconArticle size={20} />
+                            <span>Public article</span>
+                          </>
+                        ) : (
+                          <>
+                            <IconLock size={20} />
+                            <span>Internal article</span>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Status</label>
-                    <div className="text-sm text-[#3C1810]">
-                      {articleData.is_published ? 'Published' : 'Draft'}
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Status</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {articleData.is_published ? 'Published' : 'Draft'}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Article ID</label>
-                    <div className="text-sm text-[#3C1810]">
-                      {articleData.id || 'Not yet created'}
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Article ID</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {articleData.id || 'Not yet created'}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Language</label>
-                    <div className="text-sm text-[#3C1810]">English</div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Created</label>
-                    <div className="text-sm text-[#3C1810]">{formatDate(articleData.created_at)}</div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Created by</label>
-                    <div className="text-sm text-[#3C1810]">
-                      {users.find(u => u.id === articleData.created_by)?.display_name || 'Unknown'}
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Language</label>
+                      <div className="text-sm text-[#3C1810]">English</div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Last updated</label>
-                    <div className="text-sm text-[#3C1810]">
-                      {articleData.last_updated_at ? formatDate(articleData.last_updated_at) : ''}
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Created</label>
+                      <div className="text-sm text-[#3C1810]">{formatDate(articleData.created_at)}</div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">Last updated by</label>
-                    <div className="text-sm text-[#3C1810]">
-                      {articleData.last_updated_by ? 
-                        users.find(u => u.id === articleData.last_updated_by)?.display_name : ''}
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Created by</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {users.find(u => u.id === articleData.created_by)?.display_name || 'Unknown'}
+                      </div>
                     </div>
-                  </div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Last updated</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {articleData.last_updated_at ? formatDate(articleData.last_updated_at) : ''}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Last updated by</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {articleData.last_updated_by ? 
+                          users.find(u => u.id === articleData.last_updated_by)?.display_name : ''}
+                      </div>
+                    </div>
 
-                  {/* AI Section - Update the layout */}
-                  <div>
-                    <div className="pt-4 border-t border-[#8B4513]"></div>
-                    <div className="text-xs font-medium text-[#5C2E0E] mb-2">AI</div>
-                    <label className="text-xs text-[#8B6B4D] block mb-1">AI Agent</label>
-                    <div className="space-y-2">
-                      <div className="text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
-                        When enabled, AI agent will use this content to generate AI answers.
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-[#3C1810]">Disabled</span>
-                        <button 
-                          onClick={() => setArticleData(prev => ({ ...prev, enabled_ai: !prev.enabled_ai }))}
-                          className={`w-10 h-5 rounded-full relative transition-colors duration-200 ease-in-out ${
-                            articleData.enabled_ai ? 'bg-[#8B4513]' : 'bg-[#D4B69C]'
-                          }`}
-                        >
-                          <div 
-                            className={`w-4 h-4 rounded-full bg-[#FDF6E3] absolute top-0.5 transition-transform duration-200 ease-in-out ${
-                              articleData.enabled_ai ? 'translate-x-5' : 'translate-x-0.5'
+                    {/* AI Section */}
+                    <div>
+                      <div className="pt-4 border-t border-[#8B4513]"></div>
+                      <div className="text-xs font-medium text-[#5C2E0E] mb-2">AI</div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">AI Agent</label>
+                      <div className="space-y-2">
+                        <div className="text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                          When enabled, AI agent will use this content to generate AI answers.
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-[#3C1810]">Disabled</span>
+                          <button 
+                            onClick={() => setArticleData(prev => ({ ...prev, enabled_ai: !prev.enabled_ai }))}
+                            className={`w-10 h-5 rounded-full relative transition-colors duration-200 ease-in-out ${
+                              articleData.enabled_ai ? 'bg-[#8B4513]' : 'bg-[#D4B69C]'
                             }`}
-                          />
-                        </button>
+                          >
+                            <div 
+                              className={`w-4 h-4 rounded-full bg-[#FDF6E3] absolute top-0.5 transition-transform duration-200 ease-in-out ${
+                                articleData.enabled_ai ? 'translate-x-5' : 'translate-x-0.5'
+                              }`}
+                            />
+                          </button>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Help Center Section */}
+                    <div className="pt-4 border-t border-[#8B4513]">
+                      <div className="text-xs font-medium text-[#5C2E0E] mb-4">Help Center</div>
+                      
+                      <div className="space-y-2">
+                        <label className="text-xs text-[#8B6B4D] block">Collection</label>
+                        <div className="relative">
+                          <div 
+                            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                            className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#FDF6E3] rounded border border-[#8B4513] cursor-pointer hover:bg-[#F5E6D3] transition-colors duration-200 flex items-center justify-between"
+                          >
+                            <span className={articleData.collection_id ? 'text-[#3C1810]' : 'text-[#8B6B4D]'}>
+                              {articleData.collection_id ? 
+                                collections.find(c => c.id === articleData.collection_id)?.name : 
+                                'Select collection...'}
+                            </span>
+                            <IconChevronDown size={16} className="text-[#8B4513]" />
+                          </div>
+
+                          {/* Dropdown Menu */}
+                          {isDropdownOpen && (
+                            <div className="absolute z-50 w-full mt-1 bg-[#FDF6E3] border border-[#8B4513] rounded shadow-lg">
+                              {collections.length > 0 ? (
+                                <>
+                                  {collections.map((collection) => (
+                                    <div
+                                      key={collection.id}
+                                      onClick={() => {
+                                        setArticleData({ ...articleData, collection_id: collection.id });
+                                        setIsDropdownOpen(false);
+                                      }}
+                                      className="px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] cursor-pointer"
+                                    >
+                                      {collection.name}
+                                    </div>
+                                  ))}
+                                  <div
+                                    onClick={() => {
+                                      handleCreateNewCollection();
+                                      setIsDropdownOpen(false);
+                                    }}
+                                    className="px-3 py-2 text-sm text-[#8B4513] font-medium hover:bg-[#F5E6D3] cursor-pointer border-t border-[#8B4513]"
+                                  >
+                                    + Create new collection
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <div className="px-3 py-2 text-sm text-[#8B6B4D] italic">
+                                    No collections yet
+                                  </div>
+                                  <div
+                                    onClick={() => {
+                                      handleCreateNewCollection();
+                                      setIsDropdownOpen(false);
+                                    }}
+                                    className="px-3 py-2 text-sm text-[#8B4513] font-medium hover:bg-[#F5E6D3] cursor-pointer border-t border-[#8B4513]"
+                                  >
+                                    + Create new collection
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <p className="text-xs text-[#5C2E0E]">
+                          Add your article to a collection in your Help Center to make it discoverable to customers.
+                        </p>
+                      </div>
+                    </div>
+
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Collection Creation Modal */}
+      {isCreateCollectionModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+          <div className="bg-[#FDF6E3] w-[480px] rounded-lg shadow-lg">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-[#8B4513]">
+              <h2 className="text-xl font-semibold text-[#3C1810]">Create collection</h2>
+              <button 
+                onClick={() => setIsCreateCollectionModalOpen(false)}
+                className="text-[#3C1810] hover:bg-[#F5E6D3] p-2 rounded"
+              >
+                <IconX size={20} />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-4">
+              {/* Title Input */}
+              <div>
+                <label className="text-xs text-[#8B6B4D] block mb-1">
+                  Title<span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newCollection.title}
+                  onChange={(e) => {
+                    setCollectionError(null);
+                    setNewCollection(prev => ({ ...prev, title: e.target.value }));
+                  }}
+                  placeholder="e.g. Getting Started"
+                  className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#FDF6E3] border border-[#8B4513] rounded focus:outline-none focus:ring-1 focus:ring-[#8B4513]"
+                />
+              </div>
+
+              {/* Error Message */}
+              {collectionError && (
+                <div className={`text-sm ${
+                  collectionError.includes('already exists') 
+                    ? 'text-[#8B4513]' 
+                    : 'text-red-500'
+                } bg-[#F5E6D3] p-2 rounded`}>
+                  {collectionError}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-6 border-t border-[#8B4513] flex justify-end gap-2">
+              <button
+                onClick={() => setIsCreateCollectionModalOpen(false)}
+                className="px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveCollection}
+                disabled={!newCollection.title}
+                className="px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded hover:bg-[#5C2E0E] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Create collection
+              </button>
             </div>
           </div>
         </div>

@@ -25,7 +25,18 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 // Add immediate session check
 (async () => {
   const { data: { session }, error } = await supabase.auth.getSession();
-  if (error) console.error('Session check error:', error);
+  if (error) {
+    console.error('Session check error:', error);
+  } else if (!session) {
+    console.log('No active session');
+  }
 })();
+
+// Add auth state change listener
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+    console.log('Auth state changed:', event);
+  }
+});
 
 export default supabase;
