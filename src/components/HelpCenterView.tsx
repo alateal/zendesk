@@ -94,6 +94,10 @@ const HelpCenterView = () => {
     enabled_ai: false,
     collection_id: ''
   });
+  const [isCollectionDropdownOpen, setIsCollectionDropdownOpen] = useState(false);
+  const [isNewCollectionModalOpen, setIsNewCollectionModalOpen] = useState(false);
+  const [newCollectionTitle, setNewCollectionTitle] = useState('');
+  const [existingCollectionMessage, setExistingCollectionMessage] = useState('');
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '';
@@ -254,6 +258,48 @@ const HelpCenterView = () => {
     fetchUsers();
   }, []);
 
+  // Add useEffect to keep inbox count updated
+  useEffect(() => {
+    if (!selectedOrg?.id) return;
+
+    const fetchInboxCount = async () => {
+      const { data: activeConversations, error } = await supabase
+        .from('conversations')
+        .select('id, status')
+        .eq('organizations_id', selectedOrg.id)
+        .in('status', ['New', 'Active']);
+
+      if (error) {
+        console.error('Error fetching inbox count:', error);
+        return;
+      }
+
+      setNewConversationsCount(activeConversations?.length || 0);
+    };
+
+    fetchInboxCount();
+
+    const channel = supabase
+      .channel('inbox_count_help')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'conversations',
+          filter: `organizations_id=eq.${selectedOrg.id}`
+        },
+        () => {
+          fetchInboxCount();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [selectedOrg?.id]);
+
   const toggleCollection = (collectionId: string) => {
     setExpandedCollections(prev => ({
       ...prev,
@@ -383,6 +429,55 @@ const HelpCenterView = () => {
     }
   };
 
+  const handleCreateCollection = async () => {
+    if (!newCollectionTitle.trim() || !selectedOrg?.id) return;
+
+    // First check if collection already exists (case-insensitive search)
+    const { data: existingCollection, error: searchError } = await supabase
+      .from('collections')
+      .select()
+      .eq('organizations_id', selectedOrg.id)
+      .ilike('title', newCollectionTitle.trim())
+      .single();
+
+    if (searchError && searchError.code !== 'PGRST116') { // PGRST116 means no rows returned
+      console.error('Error checking for existing collection:', searchError);
+      return;
+    }
+
+    if (existingCollection) {
+      // Show notification that collection already exists
+      setExistingCollectionMessage(`Collection "${newCollectionTitle}" already exists and has been selected`);
+      // Use existing collection
+      setNewArticle(prev => ({ ...prev, collection_id: existingCollection.id }));
+      setSelectedArticle(prev => prev ? { ...prev, collection_id: existingCollection.id } : prev);
+      // Don't close the modal yet, let user see the message
+    } else {
+      // Create new collection
+      const { data: newCollection, error: createError } = await supabase
+        .from('collections')
+        .insert([{ 
+          title: newCollectionTitle.trim(), 
+          organizations_id: selectedOrg.id 
+        }])
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Error creating collection:', createError);
+        return;
+      }
+
+      if (newCollection) {
+        setNewArticle(prev => ({ ...prev, collection_id: newCollection.id }));
+        setSelectedArticle(prev => prev ? { ...prev, collection_id: newCollection.id } : prev);
+        setNewCollectionTitle('');
+        setIsNewCollectionModalOpen(false);
+        setIsCollectionDropdownOpen(false);
+      }
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (!event.target) return;
@@ -415,7 +510,7 @@ const HelpCenterView = () => {
           >
             <IconInbox size={24} className="text-[#3C1810]" />
             {newConversationsCount > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
+              <span className="absolute -top-1 -right-1 bg-[#8B4513] text-[#FDF6E3] text-xs rounded-full w-4 h-4 flex items-center justify-center">
                 {newConversationsCount}
               </span>
             )}
@@ -549,7 +644,7 @@ const HelpCenterView = () => {
 
                   {/* Dropdown Menu */}
                   {isAddDropdownOpen && (
-                    <div className="absolute right-0 mt-1 w-48 bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-10">
+                    <div className="absolute right-0 mt-1 w-48 max-h-[200px] overflow-y-auto bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-10">
                       <button 
                         onClick={() => {
                           setNewArticle({
@@ -568,8 +663,7 @@ const HelpCenterView = () => {
                       </button>
                       <button 
                         onClick={() => {
-                          // Handle create collection
-                          setIsAddDropdownOpen(false);
+                          setIsNewCollectionModalOpen(true);
                         }}
                         className="w-full px-4 py-2 text-left text-sm text-[#3C1810] hover:bg-[#F5E6D3] rounded-b-lg flex items-center gap-2"
                       >
@@ -901,21 +995,42 @@ const HelpCenterView = () => {
                       <div className="text-xs font-medium text-[#5C2E0E] mb-4">Help Center</div>
                       <div className="space-y-2">
                         <label className="text-xs text-[#8B6B4D] block">Collection</label>
-                        <select
-                          value={selectedArticle.collection_id}
-                          onChange={(e) => setSelectedArticle({ 
-                            ...selectedArticle, 
-                            collection_id: e.target.value 
-                          })}
-                          className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#FDF6E3] rounded border border-[#8B4513]"
-                        >
-                          <option value="">Select collection...</option>
-                          {collections.map((collection) => (
-                            <option key={collection.id} value={collection.id}>
-                              {collection.title}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="relative">
+                          <button
+                            onClick={() => setIsCollectionDropdownOpen(!isCollectionDropdownOpen)}
+                            className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#F5E6D3] rounded border border-[#8B4513] flex items-center justify-between hover:bg-[#F0D6B3] transition-colors duration-200"
+                          >
+                            <span>
+                              {collections.find(c => c.id === selectedArticle.collection_id)?.title || 'Select collection...'}
+                            </span>
+                            <IconChevronDown size={16} className="text-[#8B4513]" />
+                          </button>
+                          
+                          {isCollectionDropdownOpen && (
+                            <div className="absolute z-50 w-full mt-1 bg-[#FDF6E3] border border-[#8B4513] rounded shadow-lg max-h-48 overflow-y-auto">
+                              {collections.map((collection) => (
+                                <button
+                                  key={collection.id}
+                                  onClick={() => {
+                                    setSelectedArticle({ ...selectedArticle, collection_id: collection.id });
+                                    setIsCollectionDropdownOpen(false);
+                                  }}
+                                  className="w-full px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] text-left"
+                                >
+                                  {collection.title}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => {
+                                  setIsNewCollectionModalOpen(true);
+                                }}
+                                className="w-full px-3 py-2 text-sm text-[#8B4513] font-medium hover:bg-[#F5E6D3] text-left border-t border-[#8B4513]"
+                              >
+                                + Create new collection
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -998,31 +1113,41 @@ const HelpCenterView = () => {
                 
                 <div className="flex-1 overflow-y-auto p-6">
                   <div className="space-y-4">
-                    {/* Collection Section */}
-                    <div className="pt-4">
-                      <div className="text-xs font-medium text-[#5C2E0E] mb-4">Help Center</div>
-                      <div className="space-y-2">
-                        <label className="text-xs text-[#8B6B4D] block">Collection</label>
-                        <select
-                          value={newArticle.collection_id}
-                          onChange={(e) => setNewArticle({ 
-                            ...newArticle, 
-                            collection_id: e.target.value 
-                          })}
-                          className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#FDF6E3] rounded border border-[#8B4513]"
-                        >
-                          <option value="">Select collection...</option>
-                          {collections.map((collection) => (
-                            <option key={collection.id} value={collection.id}>
-                              {collection.title}
-                            </option>
-                          ))}
-                        </select>
+                    {/* Data Section */}
+                    <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
+                      <div className="flex items-center gap-2 text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                        <IconArticle size={20} />
+                        <span>Public article</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Status</label>
+                      <div className="text-sm text-[#3C1810]">
+                        Draft
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Language</label>
+                      <div className="text-sm text-[#3C1810]">English</div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Created</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {formatDate(newArticle.created_at)}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-[#8B6B4D] block mb-1">Created by</label>
+                      <div className="text-sm text-[#3C1810]">
+                        {users.find(u => u.id === newArticle.created_by)?.display_name || 'Unknown'}
                       </div>
                     </div>
 
                     {/* AI Section */}
-                    <div className="pt-4 border-t border-[#8B4513]">
+                    <div>
+                      <div className="pt-4 border-t border-[#8B4513]"></div>
                       <div className="text-xs font-medium text-[#5C2E0E] mb-2">AI</div>
                       <label className="text-xs text-[#8B6B4D] block mb-1">AI Agent</label>
                       <div className="space-y-2">
@@ -1051,9 +1176,115 @@ const HelpCenterView = () => {
                         </div>
                       </div>
                     </div>
+
+                    {/* Collection Section */}
+                    <div className="pt-4 border-t border-[#8B4513]">
+                      <div className="text-xs font-medium text-[#5C2E0E] mb-4">Help Center</div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-[#8B6B4D] block">Collection</label>
+                        <div className="relative">
+                          <button
+                            onClick={() => setIsCollectionDropdownOpen(!isCollectionDropdownOpen)}
+                            className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#F5E6D3] rounded border border-[#8B4513] flex items-center justify-between hover:bg-[#F0D6B3] transition-colors duration-200"
+                          >
+                            <span>
+                              {collections.find(c => c.id === newArticle.collection_id)?.title || 'Select collection...'}
+                            </span>
+                            <IconChevronDown size={16} className="text-[#8B4513]" />
+                          </button>
+                          
+                          {isCollectionDropdownOpen && (
+                            <div className="absolute z-50 w-full mt-1 bg-[#FDF6E3] border border-[#8B4513] rounded shadow-lg max-h-48 overflow-y-auto">
+                              {collections.map((collection) => (
+                                <button
+                                  key={collection.id}
+                                  onClick={() => {
+                                    setNewArticle({ ...newArticle, collection_id: collection.id });
+                                    setIsCollectionDropdownOpen(false);
+                                  }}
+                                  className="w-full px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] text-left"
+                                >
+                                  {collection.title}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => {
+                                  setIsNewCollectionModalOpen(true);
+                                }}
+                                className="w-full px-3 py-2 text-sm text-[#8B4513] font-medium hover:bg-[#F5E6D3] text-left border-t border-[#8B4513]"
+                              >
+                                + Create new collection
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Collection Modal */}
+      {isNewCollectionModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-[#FDF6E3] w-full max-w-md rounded-lg">
+            <div className="flex items-center justify-between p-4 border-b border-[#8B4513]">
+              <h2 className="text-2xl font-medium text-[#3C1810]">Create collection</h2>
+              <button 
+                onClick={() => {
+                  setIsNewCollectionModalOpen(false);
+                  setExistingCollectionMessage('');
+                }}
+                className="p-2 hover:bg-[#F5E6D3] rounded"
+              >
+                <IconX size={20} className="text-[#3C1810]" />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-[#3C1810] block mb-2">Title<span className="text-[#8B4513]">*</span></label>
+                  <input
+                    type="text"
+                    value={newCollectionTitle}
+                    onChange={(e) => {
+                      setNewCollectionTitle(e.target.value);
+                      setExistingCollectionMessage('');
+                    }}
+                    placeholder="e.g. Getting Started"
+                    className="w-full px-3 py-2 text-sm text-[#3C1810] bg-[#FDF6E3] border border-[#8B4513] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#8B4513] placeholder-[#8B6B4D]"
+                    autoFocus
+                  />
+                </div>
+                {existingCollectionMessage && (
+                  <div className="bg-[#F5E6D3] text-[#8B4513] px-3 py-2 rounded-lg text-sm">
+                    {existingCollectionMessage}
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-end gap-2 p-4 border-t border-[#8B4513]">
+              <button 
+                onClick={() => {
+                  setIsNewCollectionModalOpen(false);
+                  setExistingCollectionMessage('');
+                }}
+                className="px-4 py-2 text-base text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleCreateCollection}
+                className="px-4 py-2 text-base bg-[#8B4513] text-[#FDF6E3] hover:bg-[#5C2E0E] rounded-lg"
+              >
+                Create collection
+              </button>
             </div>
           </div>
         </div>

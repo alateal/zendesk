@@ -1,27 +1,29 @@
 import { useState, useEffect, useRef } from 'react';
-import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
-import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
-import IconBrandSlack from '@tabler/icons-react/dist/esm/icons/IconBrandSlack';
-import IconMail from '@tabler/icons-react/dist/esm/icons/IconMail';
-import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
-import IconChartBar from '@tabler/icons-react/dist/esm/icons/IconChartBar';
-import IconSend from '@tabler/icons-react/dist/esm/icons/IconSend';
-import IconPlus from '@tabler/icons-react/dist/esm/icons/IconPlus';
-import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
-import IconDotsVertical from '@tabler/icons-react/dist/esm/icons/IconDotsVertical';
-import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
-import IconStarFilled from '@tabler/icons-react/dist/esm/icons/IconStarFilled';
-import IconStar from '@tabler/icons-react/dist/esm/icons/IconStar';
-import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
-import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
-import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
-import IconX from '@tabler/icons-react/dist/esm/icons/IconX';
-import IconUsers from '@tabler/icons-react/dist/esm/icons/IconUsers';
-import IconTag from '@tabler/icons-react/dist/esm/icons/IconTag';
-import IconBuilding from '@tabler/icons-react/dist/esm/icons/IconBuilding';
-import IconCalendar from '@tabler/icons-react/dist/esm/icons/IconCalendar';
-import IconStatusChange from '@tabler/icons-react/dist/esm/icons/IconStatusChange';
-import IconCategory from '@tabler/icons-react/dist/esm/icons/IconCategory';
+import {
+  IconInbox,
+  IconBook,
+  IconBrandSlack,
+  IconMail,
+  IconRobot,
+  IconChartBar,
+  IconSend,
+  IconPlus,
+  IconSearch,
+  IconDotsVertical,
+  IconSettings,
+  IconStarFilled,
+  IconStar,
+  IconChevronDown,
+  IconCheck,
+  IconUser,
+  IconX,
+  IconUsers,
+  IconTag,
+  IconBuilding,
+  IconCalendar,
+  IconStatusChange,
+  IconCategory
+} from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import supabase from '../supabase';
 
@@ -32,37 +34,35 @@ type Organization = {
   created_at: string;
 };
 
+type Message = {
+  id: string;
+  content: string;
+  sender_id: string;
+  sender_type: string;
+  created_at: string;
+  conversations_id: string;
+};
+
+type Customer = {
+  id: string;
+  full_name: string;
+  email: string;
+};
+
 type Conversation = {
   id: string;
   created_at: string;
   organizations_id: string;
   channels: string;
   status: string;
-  customer_name: string;
-  customers?: {
-    id: string;
-    full_name: string;
-    email: string;
-  };
-  latest_message?: {
-    sender_id: string;
-    sender_type: string;
-    content: string;
-    created_at: string;
-  };
   satisfaction_score?: string;
   is_important: boolean;
+  customer_id?: string;
   assigned_to?: string;
-};
-
-type Message = {
-  id: string;
-  created_at: string;
-  organizations_id: string;
-  sender_id: string;
-  sender_name: string;
-  sender_type: string;
-  content: string;
+  customer_name?: string;
+  latest_message?: Message;
+  customers?: Customer;
+  messages?: Message[];
 };
 
 // Add this type for insights
@@ -296,7 +296,7 @@ const Dashboard = () => {
     }
   };
 
-  // Update the fetchConversations function to filter based on role and assignment
+  // Update the fetchConversations function
   const fetchConversations = async () => {
     try {
       // Get current user
@@ -334,11 +334,6 @@ const Dashboard = () => {
         .order('is_important', { ascending: false })
         .order('created_at', { ascending: false });
 
-      // If user is not admin, only show assigned conversations
-      if (currentUserRole !== '5015a883-2f23-4bec-ac3d-9cfca8ecd824') {
-        query = query.eq('assigned_to', currentUser.id);
-      }
-
       const { data: conversationsData, error: conversationsError } = await query;
 
       if (conversationsError) throw conversationsError;
@@ -355,13 +350,13 @@ const Dashboard = () => {
           return {
             ...conv,
             customer_name: conv.customers?.full_name || 'Unknown Customer',
-            latest_message: latestMessage
-          };
+            latest_message: latestMessage,
+            customers: conv.customers,
+            messages: sortedMessages
+          } as Conversation;
         });
 
         setConversations(conversationsWithMessages);
-      } else {
-        setConversations([]);
       }
     } catch (error) {
       console.error('Error fetching conversations:', error);
@@ -572,9 +567,26 @@ const Dashboard = () => {
   }, [selectedOrg]);
 
   // Update the conversation click handler
-  const handleConversationClick = (conversationId: string) => {
+  const handleConversationClick = async (conversationId: string) => {
     setSelectedApp(conversationId);
     loadMessages(conversationId);
+
+    // Get the conversation
+    const conversation = conversations.find(conv => conv.id === conversationId);
+    
+    // If the conversation is new, update its status to active
+    if (conversation?.status === 'New') {
+      try {
+        const { error } = await supabase
+          .from('conversations')
+          .update({ status: 'Active' })
+          .eq('id', conversationId);
+
+        if (error) throw error;
+      } catch (error) {
+        console.error('Error updating conversation status:', error);
+      }
+    }
   };
 
   // Add close conversation handler
@@ -1768,10 +1780,7 @@ const Dashboard = () => {
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={handleAssigneeClick}
-                className={`w-full bg-[#F5E6D3] p-4 rounded-lg border border-[#8B4513] flex items-center justify-between ${
-                  currentUserRole !== '5015a883-2f23-4bec-ac3d-9cfca8ecd824' ? 'cursor-not-allowed opacity-75' : ''
-                }`}
-                disabled={currentUserRole !== '5015a883-2f23-4bec-ac3d-9cfca8ecd824'}
+                className="w-full bg-[#F5E6D3] p-4 rounded-lg border border-[#8B4513] flex items-center justify-between"
               >
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-[#5C2E0E]">Assignee</span>
@@ -1783,12 +1792,10 @@ const Dashboard = () => {
                     })()}
                   </span>
                 </div>
-                {currentUserRole === '5015a883-2f23-4bec-ac3d-9cfca8ecd824' && (
-                  <IconChevronDown 
-                    size={20} 
-                    className={`text-[#8B4513] transition-transform ${isAssigneeOpen ? 'rotate-180' : ''}`}
-                  />
-                )}
+                <IconChevronDown 
+                  size={20} 
+                  className={`text-[#8B4513] transition-transform ${isAssigneeOpen ? 'rotate-180' : ''}`}
+                />
               </button>
 
               {/* Dropdown Menu */}
