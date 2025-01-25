@@ -1,35 +1,41 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import supabase from '../supabase';
+import IconFilter from '@tabler/icons-react/dist/esm/icons/IconFilter';
+import IconArticle from '@tabler/icons-react/dist/esm/icons/IconArticle';
+import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
+import IconBrain from '@tabler/icons-react/dist/esm/icons/IconBrain';
+import IconFolder from '@tabler/icons-react/dist/esm/icons/IconFolder';
+import IconClock from '@tabler/icons-react/dist/esm/icons/IconClock';
+import IconCheckbox from '@tabler/icons-react/dist/esm/icons/IconCheckbox';
+import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
 import IconBook from '@tabler/icons-react/dist/esm/icons/IconBook';
 import IconInbox from '@tabler/icons-react/dist/esm/icons/IconInbox';
-import IconRobot from '@tabler/icons-react/dist/esm/icons/IconRobot';
 import IconChartBar from '@tabler/icons-react/dist/esm/icons/IconChartBar';
 import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings';
 import IconUser from '@tabler/icons-react/dist/esm/icons/IconUser';
 import IconPlus from '@tabler/icons-react/dist/esm/icons/IconPlus';
-import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch';
-import { useNavigate } from 'react-router-dom';
-import supabase from '../supabase';
-import IconArticle from '@tabler/icons-react/dist/esm/icons/IconArticle';
-import IconLock from '@tabler/icons-react/dist/esm/icons/IconLock';
-import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
 import IconX from '@tabler/icons-react/dist/esm/icons/IconX';
 import IconMaximize from '@tabler/icons-react/dist/esm/icons/IconMaximize';
 import IconChevronDown from '@tabler/icons-react/dist/esm/icons/IconChevronDown';
+import IconLock from '@tabler/icons-react/dist/esm/icons/IconLock';
+import IconCheck from '@tabler/icons-react/dist/esm/icons/IconCheck';
 
 type Article = {
   id: string;
-  created_at: string;
-  organizations_id: string;
   title: string;
   description: string;
   content: string;
+  type?: string;
   is_public: boolean;
   is_published: boolean;
+  collection_id: string;
+  created_at: string;
   last_updated_at: string | null;
-  last_updated_by: string | null;
-  created_by: string;
+  organizations_id: string;
   enabled_ai: boolean;
-  collection_id?: string;
+  created_by: string;
+  last_updated_by: string | null;
   collections?: {
     id: string;
     title: string;
@@ -83,13 +89,23 @@ const KnowledgeBase = () => {
   const [isNewContentModalOpen, setIsNewContentModalOpen] = useState(false);
   const [newConversationsCount, setNewConversationsCount] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
-  const [collections, setCollections] = useState<Array<{ id: string; name: string }>>([]);
+  const [collections, setCollections] = useState<Array<{ id: string; title: string }>>([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isCreateCollectionModalOpen, setIsCreateCollectionModalOpen] = useState(false);
   const [newCollection, setNewCollection] = useState({
     title: ''
   });
   const [collectionError, setCollectionError] = useState<string | null>(null);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [filters, setFilters] = useState({
+    type: '',
+    aiAgent: false,
+    aiCopilot: false,
+    collection: '',
+    status: '',
+    lastUpdated: ''
+  });
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, right: 0 });
 
   // Add authentication check
   useEffect(() => {
@@ -252,12 +268,12 @@ const KnowledgeBase = () => {
 
             if (article) {
               if (article.is_public) {
-                setPublicArticles(prev => {
+          setPublicArticles(prev => {
                   const filtered = prev.filter(a => a.id !== article.id);
                   return [article, ...filtered];
-                });
+          });
               } else {
-                setInternalArticles(prev => {
+          setInternalArticles(prev => {
                   const filtered = prev.filter(a => a.id !== article.id);
                   return [article, ...filtered];
                 });
@@ -341,7 +357,7 @@ const KnowledgeBase = () => {
       }
 
       if (collections) {
-        setCollections(collections.map(c => ({ id: c.id, name: c.title })));
+        setCollections(collections.map(c => ({ id: c.id, title: c.title })));
       }
     };
 
@@ -363,7 +379,7 @@ const KnowledgeBase = () => {
             const newCollection = payload.new;
             setCollections(prev => [{
               id: newCollection.id,
-              name: newCollection.title
+              title: newCollection.title
             }, ...prev]);
           } else if (payload.eventType === 'DELETE') {
             const deletedCollection = payload.old;
@@ -375,7 +391,7 @@ const KnowledgeBase = () => {
             setCollections(prev => 
               prev.map(c => 
                 c.id === updatedCollection.id 
-                  ? { id: updatedCollection.id, name: updatedCollection.title }
+                  ? { id: updatedCollection.id, title: updatedCollection.title }
                   : c
               )
             );
@@ -533,24 +549,24 @@ const KnowledgeBase = () => {
       if (error) throw error;
 
       // Close the modal
-      setArticleModalType(null);
+        setArticleModalType(null);
       
       // Reset the form
-      setArticleData({
-        id: '',
-        created_at: new Date().toISOString(),
-        organizations_id: selectedOrg,
-        title: '',
-        description: '',
-        content: '',
-        is_public: true,
-        is_published: false,
-        last_updated_at: null,
-        last_updated_by: null,
-        created_by: currentUser.id,
+        setArticleData({
+          id: '',
+          created_at: new Date().toISOString(),
+          organizations_id: selectedOrg,
+          title: '',
+          description: '',
+          content: '',
+          is_public: true,
+          is_published: false,
+          last_updated_at: null,
+          last_updated_by: null,
+          created_by: currentUser.id,
         enabled_ai: false,
         collection_id: '',
-      });
+        });
 
     } catch (error) {
       console.error('Error saving article:', error);
@@ -568,18 +584,64 @@ const KnowledgeBase = () => {
     setIsNewContentModalOpen(true);
   };
 
-  // Add search filter function
+  // Update the filtering logic to work with existing code
   const filteredArticles = useMemo(() => {
     const combined = [...publicArticles, ...internalArticles];
-    if (!searchQuery) return combined;
+    return combined.filter(article => {
+      // First apply the search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = 
+          article.title.toLowerCase().includes(query) ||
+          article.description.toLowerCase().includes(query);
+        if (!matchesSearch) return false;
+      }
 
-    const query = searchQuery.toLowerCase();
-    return combined.filter(article => 
-      article.title?.toLowerCase().includes(query) ||
-      article.description?.toLowerCase().includes(query) ||
-      article.content?.toLowerCase().includes(query)
-    );
-  }, [publicArticles, internalArticles, searchQuery]);
+      // Then apply the additional filters
+      // Type filter (public/internal)
+      if (filters.type === 'public' && !article.is_public) return false;
+      if (filters.type === 'internal' && article.is_public) return false;
+      
+      // AI Agent filter
+      if (filters.aiAgent && !article.enabled_ai) return false;
+      
+      // AI Copilot filter
+      if (filters.aiCopilot && !article.enabled_ai) return false;
+      
+      // Collection filter
+      if (filters.collection && article.collection_id !== filters.collection) return false;
+      
+      // Status filter
+      if (filters.status === 'published' && !article.is_published) return false;
+      if (filters.status === 'draft' && article.is_published) return false;
+      
+      // Last Updated filter
+      if (filters.lastUpdated) {
+        const lastUpdated = new Date(article.last_updated_at || article.created_at);
+        const now = new Date();
+        
+        switch (filters.lastUpdated) {
+          case 'today':
+            if (lastUpdated.toDateString() !== now.toDateString()) return false;
+            break;
+          case 'week':
+            const weekAgo = new Date(now.setDate(now.getDate() - 7));
+            if (lastUpdated < weekAgo) return false;
+            break;
+          case 'month':
+            const monthAgo = new Date(now.setMonth(now.getMonth() - 1));
+            if (lastUpdated < monthAgo) return false;
+            break;
+          case 'year':
+            const yearAgo = new Date(now.setFullYear(now.getFullYear() - 1));
+            if (lastUpdated < yearAgo) return false;
+            break;
+        }
+      }
+      
+      return true;
+    });
+  }, [publicArticles, internalArticles, searchQuery, filters]);
 
   const handleCollectionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
@@ -648,7 +710,7 @@ const KnowledgeBase = () => {
       // Add new collection to local state
       setCollections(prev => [...prev, {
         id: collectionData.id,
-        name: collectionData.title
+        title: collectionData.title
       }]);
 
       // Set the new collection as selected
@@ -679,6 +741,21 @@ const KnowledgeBase = () => {
       const target = event.target as HTMLElement;
       if (!target.closest('.relative')) {
         setIsDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Add click outside handler for filter dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('.filter-dropdown')) {
+        setIsFilterOpen(false);
       }
     };
 
@@ -902,81 +979,347 @@ const KnowledgeBase = () => {
               </div>
             </div>
 
-            {/* Search and Filters */}
-            <div className="p-6">
-              {/* Search Bar and Filter Button */}
-              <div className="flex items-center gap-4 mb-6">
-                <div className="flex-1 relative">
+            {/* Content Container with Padding */}
+            <div className="p-12">
+              {/* Search and Filter Bar */}
+              <div className="flex items-center gap-2 mb-6">
+                <div className="relative flex-1">
                   <input
                     type="text"
+                    placeholder="Search articles..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search content..."
-                    className="w-full pl-10 pr-4 py-2.5 bg-[#F5E6D3] border border-[#8B4513] rounded-lg text-[#3C1810] placeholder-[#8B6B4D] focus:outline-none focus:ring-1 focus:ring-[#8B4513]"
+                    className="w-full px-4 py-2 pl-10 bg-[#F5E6D3] border border-[#8B4513] rounded-lg text-[#3C1810] placeholder-[#8B6B4D] focus:outline-none focus:ring-1 focus:ring-[#8B4513]"
                   />
-                  <IconSearch 
-                    size={20} 
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8B6B4D]" 
-                  />
+                  <IconSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#8B4513]" size={18} />
+                </div>
+                
+                {/* Filter Button and Dropdown */}
+                <div className="relative filter-dropdown">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const button = e.currentTarget;
+                      const rect = button.getBoundingClientRect();
+                      setDropdownPosition({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+                      setIsFilterOpen(!isFilterOpen);
+                    }}
+                    className={`p-2 rounded hover:bg-[#F5E6D3] ${
+                      isFilterOpen ? 'bg-[#F5E6D3]' : ''
+                    }`}
+                  >
+                    <IconFilter size={20} className="text-[#3C1810]" />
+                  </button>
+
+                  {isFilterOpen && (
+                    <div 
+                      className="fixed w-64 bg-[#FDF6E3] border border-[#8B4513] rounded-lg shadow-lg z-[9999] max-h-[80vh] overflow-y-auto"
+                      style={{
+                        top: dropdownPosition.top,
+                        right: dropdownPosition.right,
+                      }}
+                    >
+                      {/* Clear All Filters Button */}
+                      <div className="p-4 border-b border-[#8B4513]">
+                        <button
+                          onClick={() => setFilters({
+                            type: null,
+                            aiAgent: false,
+                            aiCopilot: false,
+                            collection: null,
+                            status: null,
+                            lastUpdated: null
+                          })}
+                          className="w-full p-2 text-sm text-[#3C1810] bg-[#F5E6D3] rounded-lg hover:bg-[#ECD6B3] transition-colors duration-200"
+                        >
+                          Clear all filters
+                        </button>
+                      </div>
+
+                      {/* Type Filter */}
+                      <div className="p-4 border-b border-[#8B4513]">
+                        <div className="text-sm font-medium text-[#3C1810] mb-2 flex items-center gap-2">
+                          <IconArticle size={16} />
+                          Type
+                        </div>
+                        <div className="space-y-2">
+                          <div 
+                            onClick={() => setFilters({ ...filters, type: filters.type === '' ? null : '' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.type === '' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.type === '' && <IconCheck size={16} />}
+                              All Types
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, type: filters.type === 'public' ? null : 'public' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.type === 'public' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.type === 'public' && <IconCheck size={16} />}
+                              Public
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, type: filters.type === 'internal' ? null : 'internal' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.type === 'internal' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.type === 'internal' && <IconCheck size={16} />}
+                              Internal
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* AI Agent Filter */}
+                      <div className="p-4 border-b border-[#8B4513]">
+                        <div className="text-sm font-medium text-[#3C1810] mb-2 flex items-center gap-2">
+                          <IconRobot size={16} />
+                          AI Agent
+                        </div>
+                        <div 
+                          onClick={() => setFilters({ ...filters, aiAgent: !filters.aiAgent })}
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                            filters.aiAgent ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            {filters.aiAgent && <IconCheck size={16} />}
+                            Enabled
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* AI Copilot Filter */}
+                      <div className="p-4 border-b border-[#8B4513]">
+                        <div className="text-sm font-medium text-[#3C1810] mb-2 flex items-center gap-2">
+                          <IconBrain size={16} />
+                          AI Copilot
+                        </div>
+                        <div 
+                          onClick={() => setFilters({ ...filters, aiCopilot: !filters.aiCopilot })}
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                            filters.aiCopilot ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            {filters.aiCopilot && <IconCheck size={16} />}
+                            Enabled
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Collections Filter */}
+                      <div className="p-4 border-b border-[#8B4513]">
+                        <div className="text-sm font-medium text-[#3C1810] mb-2 flex items-center gap-2">
+                          <IconFolder size={16} />
+                          Collections
+                        </div>
+                        <div className="space-y-2">
+                          <div 
+                            onClick={() => setFilters({ ...filters, collection: filters.collection === '' ? null : '' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.collection === '' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.collection === '' && <IconCheck size={16} />}
+                              All Collections
+                            </span>
+                          </div>
+                          {collections.map((collection) => (
+                            <div 
+                              key={collection.id}
+                              onClick={() => setFilters({ ...filters, collection: filters.collection === collection.id ? null : collection.id })}
+                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                                filters.collection === collection.id ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2">
+                                {filters.collection === collection.id && <IconCheck size={16} />}
+                                {collection.title}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Status Filter */}
+                      <div className="p-4 border-b border-[#8B4513]">
+                        <div className="text-sm font-medium text-[#3C1810] mb-2 flex items-center gap-2">
+                          <IconCheckbox size={16} />
+                          Status
+                        </div>
+                        <div className="space-y-2">
+                          <div 
+                            onClick={() => setFilters({ ...filters, status: filters.status === '' ? null : '' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.status === '' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.status === '' && <IconCheck size={16} />}
+                              All Status
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, status: filters.status === 'published' ? null : 'published' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.status === 'published' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.status === 'published' && <IconCheck size={16} />}
+                              Published
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, status: filters.status === 'draft' ? null : 'draft' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.status === 'draft' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.status === 'draft' && <IconCheck size={16} />}
+                              Draft
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Last Updated Filter */}
+                      <div className="p-4">
+                        <div className="text-sm font-medium text-[#3C1810] mb-2 flex items-center gap-2">
+                          <IconClock size={16} />
+                          Last Updated
+                        </div>
+                        <div className="space-y-2">
+                          <div 
+                            onClick={() => setFilters({ ...filters, lastUpdated: filters.lastUpdated === '' ? null : '' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.lastUpdated === '' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.lastUpdated === '' && <IconCheck size={16} />}
+                              Any time
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, lastUpdated: filters.lastUpdated === 'today' ? null : 'today' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.lastUpdated === 'today' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.lastUpdated === 'today' && <IconCheck size={16} />}
+                              Today
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, lastUpdated: filters.lastUpdated === 'week' ? null : 'week' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.lastUpdated === 'week' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.lastUpdated === 'week' && <IconCheck size={16} />}
+                              Last week
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, lastUpdated: filters.lastUpdated === 'month' ? null : 'month' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.lastUpdated === 'month' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.lastUpdated === 'month' && <IconCheck size={16} />}
+                              Last month
+                            </span>
+                          </div>
+                          <div 
+                            onClick={() => setFilters({ ...filters, lastUpdated: filters.lastUpdated === 'year' ? null : 'year' })}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${
+                              filters.lastUpdated === 'year' ? 'bg-[#8B4513] text-[#FDF6E3]' : 'hover:bg-[#F5E6D3] text-[#3C1810]'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {filters.lastUpdated === 'year' && <IconCheck size={16} />}
+                              Last year
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Table */}
+              {/* Table Container */}
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="border-b border-[#8B4513]">
-                    <tr className="text-left text-xs text-[#8B6B4D]">
-                      <th className="text-left py-3 pr-6 font-medium w-[30%]">Title</th>
-                      <th className="text-left py-3 pr-6 font-medium w-[15%]">Type</th>
-                      <th className="text-left py-3 pr-3 font-medium w-[10%]">AI Agent</th>
-                      <th className="text-left py-3 pr-3 font-medium w-[10%]">Help Center</th>
-                      <th className="text-left py-3 pr-4 font-medium w-[10%]">Collections</th>
-                      <th className="text-left py-3 pr-4 font-medium w-[12%]">Status</th>
-                      <th className="text-left py-3 font-medium w-[13%]">Last updated</th>
+                  <tr className="text-left text-xs text-[#8B6B4D]">
+                    <th className="text-left py-3 pr-6 font-medium w-[30%]">Title</th>
+                    <th className="text-left py-3 pr-6 font-medium w-[15%]">Type</th>
+                    <th className="text-left py-3 pr-3 font-medium w-[10%]">AI Agent</th>
+                    <th className="text-left py-3 pr-3 font-medium w-[10%]">Help Center</th>
+                    <th className="text-left py-3 pr-4 font-medium w-[10%]">Collections</th>
+                    <th className="text-left py-3 pr-4 font-medium w-[12%]">Status</th>
+                    <th className="text-left py-3 font-medium w-[13%]">Last updated</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredArticles.map((article) => (
+                  {filteredArticles.map((article) => (
                       <tr 
                         key={article.id} 
                         className="hover:bg-[#F5E6D3] cursor-pointer border-b border-[#8B4513] last:border-b-0"
                         onClick={() => handleArticleClick(article)}
                       >
-                        <td className="py-4 pr-6">
-                          <div className="flex items-center gap-2">
-                            <IconArticle 
-                              size={18} 
-                              className="text-[#8B4513] shrink-0" 
-                              stroke={1.5}
-                            />
-                            <span className="text-[#3C1810]">{article.title}</span>
-                          </div>
-                        </td>
-                        <td className="py-4 pr-6 text-[#3C1810] text-sm">
+                      <td className="py-4 pr-6">
+                        <div className="flex items-center gap-2">
+                          <IconArticle 
+                            size={18} 
+                            className="text-[#8B4513] shrink-0" 
+                            stroke={1.5}
+                          />
+                          <span className="text-[#3C1810]">{article.title}</span>
+                        </div>
+                      </td>
+                      <td className="py-4 pr-6 text-[#3C1810] text-sm">
                           {article.is_public ? 'Public article' : 'Internal article'}
                         </td>
                         <td className="py-4 pr-4">
-                          {article.enabled_ai ? (
-                            <IconCheck size={18} className="text-[#8B4513]" />
-                          ) : (
-                            <IconX size={18} className="text-[#8B6B4D]" />
-                          )}
+                        {article.enabled_ai ? (
+                          <IconCheck size={18} className="text-[#8B4513]" />
+                        ) : (
+                          <IconX size={18} className="text-[#8B6B4D]" />
+                        )}
                         </td>
                         <td className="py-4 pr-4">
-                          {article.is_public ? (
-                            <IconCheck size={18} className="text-[#8B4513]" />
-                          ) : (
-                            <IconX size={18} className="text-[#8B6B4D]" />
-                          )}
+                        {article.is_public ? (
+                          <IconCheck size={18} className="text-[#8B4513]" />
+                        ) : (
+                          <IconX size={18} className="text-[#8B6B4D]" />
+                        )}
                         </td>
-                        <td className="py-4 pr-4 text-[#3C1810] text-sm">
-                          {article.collections?.title || 'Uncategorized'}
-                        </td>
+                      <td className="py-4 pr-4 text-[#3C1810] text-sm">
+                        {article.collections?.title || 'Uncategorized'}
+                      </td>
                         <td className="py-4 pr-4">
                           <span className={`px-2 py-1 rounded-full text-sm ${
                             article.is_published 
-                              ? 'bg-[#DCC0A3] text-[#5C2E0E]' 
-                              : 'bg-[#F5E6D3] text-[#8B6B4D]'
+                            ? 'bg-[#DCC0A3] text-[#5C2E0E]' 
+                            : 'bg-[#F5E6D3] text-[#8B6B4D]'
                           }`}>
                             {article.is_published ? 'Published' : 'Draft'}
                           </span>
@@ -1233,89 +1576,89 @@ const KnowledgeBase = () => {
                 <div className="flex-1 overflow-y-auto p-6">
                   <div className="space-y-4">
                     {/* Data Section */}
-                    <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
-                      <div className="flex items-center gap-2 text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
-                        {articleData.is_public ? (
-                          <>
-                            <IconArticle size={20} />
-                            <span>Public article</span>
-                          </>
-                        ) : (
-                          <>
-                            <IconLock size={20} />
-                            <span>Internal article</span>
-                          </>
-                        )}
-                      </div>
+                  <div className="text-xs font-medium text-[#5C2E0E]">Data</div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Type</label>
+                    <div className="flex items-center gap-2 text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                      {articleData.is_public ? (
+                        <>
+                          <IconArticle size={20} />
+                          <span>Public article</span>
+                        </>
+                      ) : (
+                        <>
+                          <IconLock size={20} />
+                          <span>Internal article</span>
+                        </>
+                      )}
                     </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Status</label>
-                      <div className="text-sm text-[#3C1810]">
-                        {articleData.is_published ? 'Published' : 'Draft'}
-                      </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Status</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.is_published ? 'Published' : 'Draft'}
                     </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Article ID</label>
-                      <div className="text-sm text-[#3C1810]">
-                        {articleData.id || 'Not yet created'}
-                      </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Article ID</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.id || 'Not yet created'}
                     </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Language</label>
-                      <div className="text-sm text-[#3C1810]">English</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Language</label>
+                    <div className="text-sm text-[#3C1810]">English</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Created</label>
+                    <div className="text-sm text-[#3C1810]">{formatDate(articleData.created_at)}</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Created by</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {users.find(u => u.id === articleData.created_by)?.display_name || 'Unknown'}
                     </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Created</label>
-                      <div className="text-sm text-[#3C1810]">{formatDate(articleData.created_at)}</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Last updated</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.last_updated_at ? formatDate(articleData.last_updated_at) : ''}
                     </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Created by</label>
-                      <div className="text-sm text-[#3C1810]">
-                        {users.find(u => u.id === articleData.created_by)?.display_name || 'Unknown'}
-                      </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">Last updated by</label>
+                    <div className="text-sm text-[#3C1810]">
+                      {articleData.last_updated_by ? 
+                        users.find(u => u.id === articleData.last_updated_by)?.display_name : ''}
                     </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Last updated</label>
-                      <div className="text-sm text-[#3C1810]">
-                        {articleData.last_updated_at ? formatDate(articleData.last_updated_at) : ''}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">Last updated by</label>
-                      <div className="text-sm text-[#3C1810]">
-                        {articleData.last_updated_by ? 
-                          users.find(u => u.id === articleData.last_updated_by)?.display_name : ''}
-                      </div>
-                    </div>
+                  </div>
 
                     {/* AI Section */}
-                    <div>
-                      <div className="pt-4 border-t border-[#8B4513]"></div>
-                      <div className="text-xs font-medium text-[#5C2E0E] mb-2">AI</div>
-                      <label className="text-xs text-[#8B6B4D] block mb-1">AI Agent</label>
-                      <div className="space-y-2">
-                        <div className="text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
-                          When enabled, AI agent will use this content to generate AI answers.
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-[#3C1810]">Disabled</span>
-                          <button 
-                            onClick={() => setArticleData(prev => ({ ...prev, enabled_ai: !prev.enabled_ai }))}
-                            className={`w-10 h-5 rounded-full relative transition-colors duration-200 ease-in-out ${
-                              articleData.enabled_ai ? 'bg-[#8B4513]' : 'bg-[#D4B69C]'
+                  <div>
+                    <div className="pt-4 border-t border-[#8B4513]"></div>
+                    <div className="text-xs font-medium text-[#5C2E0E] mb-2">AI</div>
+                    <label className="text-xs text-[#8B6B4D] block mb-1">AI Agent</label>
+                    <div className="space-y-2">
+                      <div className="text-sm text-[#3C1810] bg-[#F5E6D3] px-3 py-2 rounded">
+                        When enabled, AI agent will use this content to generate AI answers.
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-[#3C1810]">Disabled</span>
+                        <button 
+                          onClick={() => setArticleData(prev => ({ ...prev, enabled_ai: !prev.enabled_ai }))}
+                          className={`w-10 h-5 rounded-full relative transition-colors duration-200 ease-in-out ${
+                            articleData.enabled_ai ? 'bg-[#8B4513]' : 'bg-[#D4B69C]'
+                          }`}
+                        >
+                          <div 
+                            className={`w-4 h-4 rounded-full bg-[#FDF6E3] absolute top-0.5 transition-transform duration-200 ease-in-out ${
+                              articleData.enabled_ai ? 'translate-x-5' : 'translate-x-0.5'
                             }`}
-                          >
-                            <div 
-                              className={`w-4 h-4 rounded-full bg-[#FDF6E3] absolute top-0.5 transition-transform duration-200 ease-in-out ${
-                                articleData.enabled_ai ? 'translate-x-5' : 'translate-x-0.5'
-                              }`}
-                            />
-                          </button>
-                        </div>
+                          />
+                        </button>
                       </div>
                     </div>
+                  </div>
 
                     {/* Help Center Section */}
                     <div className="pt-4 border-t border-[#8B4513]">
@@ -1330,11 +1673,11 @@ const KnowledgeBase = () => {
                           >
                             <span className={articleData.collection_id ? 'text-[#3C1810]' : 'text-[#8B6B4D]'}>
                               {articleData.collection_id ? 
-                                collections.find(c => c.id === articleData.collection_id)?.name : 
+                                collections.find(c => c.id === articleData.collection_id)?.title : 
                                 'Select collection...'}
                             </span>
                             <IconChevronDown size={16} className="text-[#8B4513]" />
-                          </div>
+                </div>
 
                           {/* Dropdown Menu */}
                           {isDropdownOpen && (
@@ -1350,8 +1693,8 @@ const KnowledgeBase = () => {
                                       }}
                                       className="px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] cursor-pointer"
                                     >
-                                      {collection.name}
-                                    </div>
+                                      {collection.title}
+              </div>
                                   ))}
                                   <div
                                     onClick={() => {
@@ -1361,13 +1704,13 @@ const KnowledgeBase = () => {
                                     className="px-3 py-2 text-sm text-[#8B4513] font-medium hover:bg-[#F5E6D3] cursor-pointer border-t border-[#8B4513]"
                                   >
                                     + Create new collection
-                                  </div>
+            </div>
                                 </>
                               ) : (
                                 <>
                                   <div className="px-3 py-2 text-sm text-[#8B6B4D] italic">
                                     No collections yet
-                                  </div>
+          </div>
                                   <div
                                     onClick={() => {
                                       handleCreateNewCollection();
