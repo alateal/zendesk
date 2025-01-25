@@ -17,16 +17,24 @@ import {
   IconLock
 } from '@tabler/icons-react';
 
-type Article = {
+type CollectionArticle = {
   id: string;
   title: string;
   description: string;
   is_public: boolean;
   is_published: boolean;
+};
+
+type Article = {
+  id: string;
+  title: string;
+  description: string;
+  content: string;
+  is_public: boolean;
+  is_published: boolean;
   collection_id: string;
   created_at: string;
   last_updated_at: string | null;
-  content: string;
   organizations_id: string;
   enabled_ai: boolean;
   created_by: string;
@@ -36,9 +44,8 @@ type Article = {
 type Collection = {
   id: string;
   title: string;
-  articles: Article[];
   organizations_id: string;
-  isExpanded?: boolean;
+  articles: CollectionArticle[];
 };
 
 type SelectedArticle = {
@@ -69,7 +76,7 @@ const HelpCenterView = () => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [newConversationsCount, setNewConversationsCount] = useState(0);
   const [selectedSection, setSelectedSection] = useState('help');
-  const [selectedArticle, setSelectedArticle] = useState<SelectedArticle | null>(null);
+  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [isArticleModalOpen, setIsArticleModalOpen] = useState(false);
   const [users, setUsers] = useState<Array<{
     id: string;
@@ -98,6 +105,7 @@ const HelpCenterView = () => {
   const [isNewCollectionModalOpen, setIsNewCollectionModalOpen] = useState(false);
   const [newCollectionTitle, setNewCollectionTitle] = useState('');
   const [existingCollectionMessage, setExistingCollectionMessage] = useState('');
+  const [articles, setArticles] = useState<Article[]>([]);
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '';
@@ -182,28 +190,31 @@ const HelpCenterView = () => {
             title,
             description,
             is_public,
-            is_published,
-            collection_id,
-            created_at,
-            last_updated_at,
-            content,
-            organizations_id,
-            enabled_ai,
-            created_by,
-            last_updated_by
+            is_published
           )
         `)
         .eq('organizations_id', userData.organizations_id);
 
       if (collectionsData) {
-        const typedCollections: Collection[] = collectionsData.map(collection => ({
-          id: collection.id,
-          title: collection.title,
-          organizations_id: collection.organizations_id,
-          articles: collection.articles || [],
-          isExpanded: false
-        }));
-        setCollections(typedCollections);
+        // Filter to only include collections that have public AND published articles
+        const collectionsWithPublicArticles = collectionsData
+          .map(collection => ({
+            id: collection.id,
+            title: collection.title,
+            organizations_id: collection.organizations_id,
+            articles: collection.articles
+              .filter(article => article.is_public && article.is_published)
+              .map(article => ({
+                id: article.id,
+                title: article.title,
+                description: article.description || '',
+                is_public: article.is_public,
+                is_published: article.is_published
+              }))
+          }))
+          .filter(collection => collection.articles.length > 0);
+        
+        setCollections(collectionsWithPublicArticles);
       }
     };
 
@@ -307,24 +318,21 @@ const HelpCenterView = () => {
     }));
   };
 
-  const handleArticleClick = async (article: Article) => {
-    // Fetch the full article content
-    const { data: fullArticle } = await supabase
-      .from('articles')
-      .select(`
-        *,
-        collections (
-          id,
-          title
-        )
-      `)
-      .eq('id', article.id)
-      .single();
+  const handleArticleClick = (article: CollectionArticle) => {
+    // Fetch the full article data when needed
+    const fetchFullArticle = async () => {
+      const { data } = await supabase
+        .from('articles')
+        .select('*')
+        .eq('id', article.id)
+        .single();
+      
+      if (data) {
+        setSelectedArticle(data);
+      }
+    };
 
-    if (fullArticle) {
-      setSelectedArticle(fullArticle);
-      setIsArticleModalOpen(true);
-    }
+    fetchFullArticle();
   };
 
   const handleUpdateArticle = async (publish: boolean = false) => {
@@ -677,8 +685,10 @@ const HelpCenterView = () => {
               
               {/* Collections */}
               {collections.map((collection) => {
-                // Filter for public articles
-                const publicArticles = collection.articles?.filter(article => article.is_public) || [];
+                // Filter for public AND published articles
+                const publicArticles = collection.articles?.filter(article => 
+                  article.is_public && article.is_published
+                ) || [];
                 
                 return (
                   <div key={collection.id} className="mb-4">
@@ -707,7 +717,7 @@ const HelpCenterView = () => {
                     {/* Articles in collection */}
                     {expandedCollections[collection.id] && publicArticles.length > 0 && (
                       <div className="ml-6 mt-2 space-y-2">
-                        {publicArticles.map((article) => (
+                        {publicArticles.map((article: CollectionArticle) => (
                           <div 
                             key={article.id}
                             onClick={() => handleArticleClick(article)}

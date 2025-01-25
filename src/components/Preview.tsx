@@ -5,7 +5,13 @@ import supabase from '../supabase';
 type Collection = {
   id: string;
   title: string;
-  articles: any[];
+  articles: Array<{
+    id: string;
+    title: string;
+    description: string;
+    is_public: boolean;
+    is_published: boolean;
+  }>;
 };
 
 const Preview = () => {
@@ -25,16 +31,17 @@ const Preview = () => {
             id,
             title,
             description,
-            is_public
+            is_public,
+            is_published
           )
         `)
         .eq('organizations_id', '645d0512-984f-4a3a-b625-5b429b24291e'); // CHANEL org ID
 
       if (collectionsData) {
-        // Filter to only include collections that have public articles
+        // Filter to only include collections that have public AND published articles
         const collectionsWithPublicArticles = collectionsData.map(collection => ({
           ...collection,
-          articles: collection.articles.filter(article => article.is_public)
+          articles: collection.articles.filter(article => article.is_public && article.is_published)
         })).filter(collection => collection.articles.length > 0);
         
         setCollections(collectionsWithPublicArticles);
@@ -49,6 +56,12 @@ const Preview = () => {
       {/* Header */}
       <header className="p-6">
         <div className="container mx-auto">
+          <button 
+            onClick={() => navigate('/knowledge/help')}
+            className="absolute left-8 top-8 text-[#6b6b6b] hover:text-[#1a1a1a] flex items-center gap-2"
+          >
+            ← Back to Help Center
+          </button>
           <h1 className="text-4xl font-bold tracking-wider text-center text-[#1a1a1a] mb-12">
             CHANEL
           </h1>

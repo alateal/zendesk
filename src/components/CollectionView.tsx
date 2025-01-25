@@ -67,6 +67,12 @@ const CollectionView = () => {
       {/* Header */}
       <header className="p-6">
         <div className="container mx-auto">
+          <button 
+            onClick={() => navigate('/knowledge/help')}
+            className="absolute left-8 top-8 text-[#6b6b6b] hover:text-[#1a1a1a] flex items-center gap-2"
+          >
+            ← Back to Help Center
+          </button>
           <h1 className="text-4xl font-bold tracking-wider text-center text-[#1a1a1a] mb-12">
             CHANEL
           </h1>
@@ -82,7 +88,7 @@ const CollectionView = () => {
               onClick={() => navigate('/knowledge/help/preview')}
               className="text-[#6b6b6b] hover:text-[#1a1a1a] mb-4"
             >
-              ← Back to Help Center
+              ← Back to Collections
             </button>
             <h2 className="text-3xl font-semibold text-[#1a1a1a]">
               {collection.title}
@@ -98,7 +104,7 @@ const CollectionView = () => {
               <div 
                 key={article.id}
                 className="bg-[#f5f5f5] rounded-lg p-6 hover:shadow-lg transition-shadow cursor-pointer"
-                onClick={() => navigate(`/article/${article.id}`)}
+                onClick={() => navigate(`/knowledge/help/preview/article/${article.id}`)}
               >
                 <h3 className="text-lg font-medium text-[#1a1a1a] mb-2">
                   {article.title}

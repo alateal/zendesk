@@ -11,6 +11,7 @@ import KnowledgeBase from './components/KnowledgeBase'
 import HelpCenterView from './components/HelpCenterView'
 import Preview from './components/Preview'
 import CollectionView from './components/CollectionView'
+import ArticleView from './components/ArticleView'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -24,6 +25,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/knowledge/help" element={<HelpCenterView />} />
         <Route path="/knowledge/help/preview" element={<Preview />} />
         <Route path="/knowledge/help/preview/collection/:id" element={<CollectionView />} />
+        <Route path="/knowledge/help/preview/article/:id" element={<ArticleView />} />
         <Route path="/chanel" element={<Chanel />} />
       </Routes>
     </BrowserRouter>
