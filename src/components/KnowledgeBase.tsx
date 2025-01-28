@@ -59,7 +59,7 @@ const generateArticle = async (params: {
   organizationId: string;
   collectionId?: string;
 }) => {
-  const response = await fetch('/api/ai/generate-article', {
+  const response = await fetch('http://localhost:3001/ai/generate-article', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -130,6 +130,14 @@ const KnowledgeBase = () => {
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, right: 0 });
   // Add isGeneratingArticle state
   const [isGeneratingArticle, setIsGeneratingArticle] = useState(false);
+  // Add new state for error modal
+  const [errorModal, setErrorModal] = useState<{
+    isOpen: boolean;
+    message: string;
+  }>({
+    isOpen: false,
+    message: ''
+  });
 
   // Add authentication check
   useEffect(() => {
@@ -601,7 +609,7 @@ const KnowledgeBase = () => {
       // Store embeddings for all articles
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        await fetch('/api/ai/store-embeddings', {
+        const embeddingResponse = await fetch('http://localhost:3001/ai/store-embeddings', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -613,6 +621,17 @@ const KnowledgeBase = () => {
             organizationId: selectedOrg
           }),
         });
+
+        if (!embeddingResponse.ok) {
+          throw new Error('Failed to store embeddings');
+        }
+
+        const embeddingData = await embeddingResponse.json();
+        
+        setArticleData(prev => ({
+          ...prev,
+          embedding_id: embeddingData.embedding_id
+        }));
       } catch (error) {
         console.error('Error storing embeddings:', error);
         // Don't throw here, as the article is already saved
@@ -656,8 +675,23 @@ const KnowledgeBase = () => {
 
   // Update the filtering logic to work with existing code
   const filteredArticles = useMemo(() => {
-    const combined = [...publicArticles, ...internalArticles];
-    return combined.filter(article => {
+    // Create a Map to store unique articles by ID
+    const articlesMap = new Map();
+    
+    // Add public articles to the map
+    publicArticles.forEach(article => {
+      articlesMap.set(article.id, article);
+    });
+    
+    // Add internal articles to the map (will overwrite any duplicates)
+    internalArticles.forEach(article => {
+      articlesMap.set(article.id, article);
+    });
+    
+    // Convert map values back to array
+    const uniqueArticles = Array.from(articlesMap.values());
+
+    return uniqueArticles.filter(article => {
       // First apply the search filter
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
@@ -857,6 +891,28 @@ const KnowledgeBase = () => {
       </div>
     ));
   };
+
+  // Add custom error modal component before the return statement
+  const ErrorModal = ({ message, onClose }: { message: string; onClose: () => void }) => (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[70]">
+      <div className="bg-[#FDF6E3] w-[400px] rounded-lg shadow-lg">
+        <div className="p-6 flex items-start gap-4">
+          <div className="flex-1">
+            <h3 className="text-lg font-medium text-[#3C1810] mb-2">Error</h3>
+            <p className="text-[#5C2E0E]">{message}</p>
+          </div>
+        </div>
+        <div className="p-4 border-t border-[#8B4513] flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E]"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
@@ -1577,7 +1633,10 @@ const KnowledgeBase = () => {
               </h2>
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => setArticleModalType(null)}
+                  onClick={() => {
+                    setArticleModalType(null);
+                    setArticleData(defaultArticleData);
+                  }}
                   className="px-3 py-1 text-[#3C1810] hover:bg-[#F5E6D3] rounded"
                 >
                   Cancel
@@ -1598,7 +1657,10 @@ const KnowledgeBase = () => {
                   <IconMaximize size={20} className="text-[#3C1810]" />
                 </button>
                 <button 
-                  onClick={() => setArticleModalType(null)}
+                  onClick={() => {
+                    setArticleModalType(null);
+                    setArticleData(defaultArticleData);
+                  }}
                   className="p-2 hover:bg-[#F5E6D3] rounded"
                 >
                   <IconX size={20} className="text-[#3C1810]" />
@@ -1627,18 +1689,38 @@ const KnowledgeBase = () => {
                 <div className="flex items-center justify-end mb-4">
                   <button
                     onClick={async () => {
-                      if (!selectedOrg?.id || !articleData.title) {
+                      if (!selectedOrg || !articleData.title) {
+                        if (!articleData.title) {
+                          setErrorModal({
+                            isOpen: true,
+                            message: 'Please enter a title for the article'
+                          });
+                        }
                         return;
                       }
                       
                       setIsGeneratingArticle(true);
                       try {
-                        const article = await generateArticle({
-                          title: articleData.title,
-                          description: articleData.description || '',
-                          organizationId: selectedOrg.id,
-                          collectionId: articleData.collection_id
+                        const { data: { session } } = await supabase.auth.getSession();
+                        const response = await fetch('/api/ai/generate-article', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${session?.access_token}`
+                          },
+                          body: JSON.stringify({
+                            title: articleData.title,
+                            description: articleData.description || '',
+                            organizationId: selectedOrg,
+                            collectionId: articleData.collection_id
+                          }),
                         });
+
+                        if (!response.ok) {
+                          throw new Error('Failed to generate article');
+                        }
+
+                        const article = await response.json();
                         
                         setArticleData(prev => ({
                           ...prev,
@@ -1646,6 +1728,10 @@ const KnowledgeBase = () => {
                         }));
                       } catch (error) {
                         console.error('Error generating article:', error);
+                        setErrorModal({
+                          isOpen: true,
+                          message: 'Failed to generate article. Please try again.'
+                        });
                       } finally {
                         setIsGeneratingArticle(false);
                       }
@@ -1669,7 +1755,7 @@ const KnowledgeBase = () => {
                   <textarea
                     value={articleData.content}
                     onChange={(e) => setArticleData({ ...articleData, content: e.target.value })}
-                    className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
+                    className="w-full min-h-[500px] text-[#3C1810] bg-transparent border-none outline-none resize-y hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
                     placeholder="Start writing..."
                   />
                 </div>
@@ -1913,6 +1999,14 @@ const KnowledgeBase = () => {
             </div>
           </div>
         </div>
+      )}
+      
+      {/* Error Modal */}
+      {errorModal.isOpen && (
+        <ErrorModal
+          message={errorModal.message}
+          onClose={() => setErrorModal({ isOpen: false, message: '' })}
+        />
       )}
     </div>
   );

@@ -395,7 +395,7 @@ const HelpCenterView = () => {
       // Store embeddings for all articles
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        await fetch('/api/ai/store-embeddings', {
+        const embeddingResponse = await fetch('http://localhost:3001/ai/store-embeddings', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -407,10 +407,35 @@ const HelpCenterView = () => {
             organizationId: selectedOrg.id
           }),
         });
+
+        if (!embeddingResponse.ok) {
+          throw new Error('Failed to store embeddings');
+        }
       } catch (error) {
         console.error('Error storing embeddings:', error);
         // Don't throw here, as the article is already saved
       }
+
+      // Update collections state to reflect changes
+      setCollections(prev => 
+        prev.map(collection => {
+          if (collection.id === updatedArticle.collection_id) {
+            const existingArticleIndex = collection.articles?.findIndex(a => a.id === updatedArticle.id);
+            if (existingArticleIndex >= 0) {
+              const updatedArticles = [...(collection.articles || [])];
+              updatedArticles[existingArticleIndex] = {
+                id: updatedArticle.id,
+                title: updatedArticle.title,
+                description: updatedArticle.description,
+                is_public: updatedArticle.is_public,
+                is_published: updatedArticle.is_published
+              };
+              return { ...collection, articles: updatedArticles };
+            }
+          }
+          return collection;
+        })
+      );
 
       // Close the modal after successful update
       setIsArticleModalOpen(false);
@@ -433,7 +458,7 @@ const HelpCenterView = () => {
         title: newArticle.title,
         description: newArticle.description,
         content: newArticle.content,
-        is_public: true,
+        is_public: true, // Always public in help center
         is_published: publish,
         created_by: user.id,
         enabled_ai: newArticle.enabled_ai,
@@ -457,7 +482,7 @@ const HelpCenterView = () => {
       // Store embeddings for all articles
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        await fetch('/api/ai/store-embeddings', {
+        const embeddingResponse = await fetch('http://localhost:3001/ai/store-embeddings', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -469,11 +494,37 @@ const HelpCenterView = () => {
             organizationId: selectedOrg.id
           }),
         });
+
+        if (!embeddingResponse.ok) {
+          throw new Error('Failed to store embeddings');
+        }
       } catch (error) {
         console.error('Error storing embeddings:', error);
         // Don't throw here, as the article is already saved
       }
 
+      // Update collections state to reflect changes
+      setCollections(prev => 
+        prev.map(collection => {
+          if (collection.id === createdArticle.collection_id) {
+            return {
+              ...collection,
+              articles: [
+                ...(collection.articles || []),
+                {
+                  id: createdArticle.id,
+                  title: createdArticle.title,
+                  description: createdArticle.description,
+                  is_public: createdArticle.is_public,
+                  is_published: createdArticle.is_published
+                }
+              ]
+            };
+          }
+          return collection;
+        })
+      );
+      
       // Close the modal
       setIsNewArticleModalOpen(false);
       
@@ -1004,7 +1055,7 @@ const HelpCenterView = () => {
                   <textarea
                     value={selectedArticle.content}
                     onChange={(e) => setSelectedArticle({ ...selectedArticle, content: e.target.value })}
-                    className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
+                    className="w-full min-h-[500px] text-[#3C1810] bg-transparent border-none outline-none resize-y hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
                     placeholder="Start writing..."
                   />
                 </div>
@@ -1267,7 +1318,7 @@ const HelpCenterView = () => {
                   <textarea
                     value={newArticle.content}
                     onChange={(e) => setNewArticle({ ...newArticle, content: e.target.value })}
-                    className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
+                    className="w-full min-h-[500px] text-[#3C1810] bg-transparent border-none outline-none resize-y hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
                     placeholder="Start writing..."
                   />
                 </div>
