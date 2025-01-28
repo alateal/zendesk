@@ -4,7 +4,27 @@ import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
-const generateArticle: RequestHandler = async (req, res) => {
+interface TypedRequestBody<T> extends Request {
+  body: T;
+}
+
+interface GenerateArticleBody {
+  title: string;
+  description?: string;
+  organizationId: string;
+  collectionId?: string;
+}
+
+interface StoreEmbeddingsBody {
+  articleId: string;
+  content: string;
+  organizationId: string;
+}
+
+const generateArticle: RequestHandler = async (
+  req: TypedRequestBody<GenerateArticleBody>,
+  res: Response
+) => {
   try {
     const { title, description, organizationId, collectionId } = req.body;
 
@@ -30,7 +50,10 @@ const generateArticle: RequestHandler = async (req, res) => {
 };
 
 // Route to store article embeddings
-const storeEmbeddings: RequestHandler = async (req, res) => {
+const storeEmbeddings: RequestHandler = async (
+  req: TypedRequestBody<StoreEmbeddingsBody>,
+  res: Response
+) => {
   try {
     const { articleId, content, organizationId } = req.body;
 
@@ -49,7 +72,7 @@ const storeEmbeddings: RequestHandler = async (req, res) => {
   }
 };
 
-router.post('/generate-article', authMiddleware, generateArticle);
-router.post('/store-embeddings', authMiddleware, storeEmbeddings);
+router.post('/generate-article', authMiddleware as RequestHandler, generateArticle);
+router.post('/store-embeddings', authMiddleware as RequestHandler, storeEmbeddings);
 
 export const aiRoutes = router;

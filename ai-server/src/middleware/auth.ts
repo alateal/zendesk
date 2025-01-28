@@ -1,15 +1,16 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response, NextFunction, RequestHandler } from 'express';
 import { supabase } from '../services/supabase';
 
-export async function authMiddleware(
+export const authMiddleware: RequestHandler = async (
   req: Request,
   res: Response,
   next: NextFunction
-) {
+): Promise<void> => {
   const authHeader = req.headers.authorization;
   
   if (!authHeader) {
-    return res.status(401).json({ error: 'No authorization header' });
+    res.status(401).json({ error: 'No authorization header' });
+    return;
   }
 
   try {
@@ -17,13 +18,16 @@ export async function authMiddleware(
     const { data: { user }, error } = await supabase.auth.getUser(token);
 
     if (error || !user) {
-      return res.status(401).json({ error: 'Invalid token' });
+      res.status(401).json({ error: 'Invalid token' });
+      return;
     }
 
     // @ts-ignore
     req.user = user;
     next();
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    console.error('Auth error:', error);
+    res.status(401).json({ error: 'Authentication failed' });
+    return;
   }
-}
+};
