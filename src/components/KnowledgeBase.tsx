@@ -552,12 +552,39 @@ const KnowledgeBase = () => {
   const handleCreateArticle = async (publish: boolean = false) => {
     try {
       if (!selectedOrg || !currentUser) return;
+      
+      setIsGeneratingArticle(true);
+      
+      // Get the session for auth
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      // Changed endpoint from /api/ai/generate-article to /api/ai/generate-enhanced-article
+      const generateResponse = await fetch('/api/ai/generate-enhanced-article', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          title: articleData.title,
+          description: articleData.description,
+          organizationId: selectedOrg,
+          collectionId: articleData.collection_id
+        }),
+      });
 
+      if (!generateResponse.ok) {
+        throw new Error('Failed to generate article');
+      }
+
+      const { content } = await generateResponse.json();
+
+      // Prepare article data with generated content
       const articleToSave = {
         organizations_id: selectedOrg,
         title: articleData.title,
         description: articleData.description,
-        content: articleData.content,
+        content: content, // Use the generated content
         is_public: articleModalType === 'public',
         is_published: publish,
         last_updated_at: new Date().toISOString(),
@@ -606,10 +633,10 @@ const KnowledgeBase = () => {
 
       if (response.error) throw response.error;
 
-      // Store embeddings for all articles
+      // Store embeddings for the article
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        const embeddingResponse = await fetch('http://localhost:3001/ai/store-embeddings', {
+        const embeddingResponse = await fetch('/api/ai/store-embeddings', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -617,7 +644,7 @@ const KnowledgeBase = () => {
           },
           body: JSON.stringify({
             articleId: response.data.id,
-            content: articleData.content,
+            content: content,
             organizationId: selectedOrg
           }),
         });
@@ -656,9 +683,12 @@ const KnowledgeBase = () => {
       // Close modal and reset form
       setArticleModalType(null);
       setArticleData(defaultArticleData);
+
     } catch (error) {
       console.error('Error saving article:', error);
       // Handle error (show notification, etc.)
+    } finally {
+      setIsGeneratingArticle(false);
     }
   };
 
@@ -1702,7 +1732,7 @@ const KnowledgeBase = () => {
                       setIsGeneratingArticle(true);
                       try {
                         const { data: { session } } = await supabase.auth.getSession();
-                        const response = await fetch('/api/ai/generate-article', {
+                        const response = await fetch('/api/ai/generate-enhanced-article', {
                           method: 'POST',
                           headers: {
                             'Content-Type': 'application/json',

@@ -10,8 +10,10 @@ app.use(express.json());
 
 app.use('/ai', aiRoutes);
 
-app.listen(config.port, () => {
-  console.log(`AI Server running on port ${config.port}`);
+const port = config.port;
+
+app.listen(port, () => {
+  console.log(`AI Server is running on port ${port}`);
 });
 
 export default app;

@@ -1,5 +1,5 @@
 import { Router, Request, Response, RequestHandler } from 'express';
-import { aiService } from '../services/ai';
+import { aiService, langchainService } from '../services/ai';
 import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
@@ -74,5 +74,33 @@ const storeEmbeddings: RequestHandler = async (
 
 router.post('/generate-article', authMiddleware as RequestHandler, generateArticle);
 router.post('/store-embeddings', authMiddleware as RequestHandler, storeEmbeddings);
+
+router.post('/generate-enhanced-article', authMiddleware as RequestHandler, async (req, res) => {
+  try {
+    console.log('🚀 Enhanced Article Generation Started');
+    const { title, description, organizationId, collectionId } = req.body;
+
+    if (!title || !organizationId) {
+      res.status(400).json({ 
+        error: 'Title and organization ID are required' 
+      });
+      return;
+    }
+
+    console.log('📝 Generating enhanced article for:', { title, description });
+    const content = await langchainService.generateEnhancedArticle({
+      title,
+      description: description || '',
+      organizationId,
+      collectionId
+    });
+
+    console.log('✅ Enhanced article generated successfully');
+    res.json({ content });
+  } catch (error) {
+    console.error('❌ Error generating enhanced article:', error);
+    res.status(500).json({ error: 'Failed to generate enhanced article' });
+  }
+});
 
 export const aiRoutes = router;
