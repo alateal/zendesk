@@ -83,3 +83,27 @@
 - **created_at**: `timestamptz`
 - **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
 - **title**: `text`
+
+---
+
+## `ai_content_chunks`
+- **id**: `uuid` (Primary Key)
+- **created_at**: `timestamptz`
+- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
+- **article_id**: `uuid` (Foreign Key to `articles.id`)
+- **content_chunk**: `text`
+- **embedding**: `vector`
+- **chunk_index**: `integer`
+- **metadata**: `jsonb`
+---
+
+## `ai_prompts`
+- **id**: `uuid` (Primary Key)
+- **created_at**: `timestamptz`
+- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
+- **topic**: `text`
+- **prompt_template**: `text`
+- **embedding**: `vector`
+- **is_active**: `boolean`
+- **metadata**: `jsonb`
+

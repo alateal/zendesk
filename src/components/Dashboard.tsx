@@ -1106,7 +1106,7 @@ const Dashboard = () => {
           </button>
 
           <button
-            onClick={() => setSelectedNav('ai')}
+            onClick={() => navigate('/agentDali')}
             className={`p-2 rounded-lg ${
               selectedNav === 'ai'
                 ? 'bg-[#8B4513] text-[#FDF6E3]'

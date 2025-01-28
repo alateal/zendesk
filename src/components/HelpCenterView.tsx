@@ -67,6 +67,27 @@ type SelectedArticle = {
   };
 };
 
+const generateArticle = async (params: {
+  title: string;
+  description: string;
+  organizationId: string;
+  collectionId?: string;
+}) => {
+  const response = await fetch('/api/ai/generate-article', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to generate article');
+  }
+
+  return response.json();
+};
+
 const HelpCenterView = () => {
   const navigate = useNavigate();
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -106,6 +127,7 @@ const HelpCenterView = () => {
   const [newCollectionTitle, setNewCollectionTitle] = useState('');
   const [existingCollectionMessage, setExistingCollectionMessage] = useState('');
   const [articles, setArticles] = useState<Article[]>([]);
+  const [isGeneratingArticle, setIsGeneratingArticle] = useState(false);
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '';
@@ -370,6 +392,26 @@ const HelpCenterView = () => {
 
       if (error) throw error;
 
+      // Store embeddings for all articles
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetch('/api/ai/store-embeddings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`
+          },
+          body: JSON.stringify({
+            articleId: updatedArticle.id,
+            content: updatedArticle.content,
+            organizationId: selectedOrg.id
+          }),
+        });
+      } catch (error) {
+        console.error('Error storing embeddings:', error);
+        // Don't throw here, as the article is already saved
+      }
+
       // Close the modal after successful update
       setIsArticleModalOpen(false);
       setSelectedArticle(null);
@@ -411,6 +453,26 @@ const HelpCenterView = () => {
         .single();
 
       if (error) throw error;
+
+      // Store embeddings for all articles
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetch('/api/ai/store-embeddings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`
+          },
+          body: JSON.stringify({
+            articleId: createdArticle.id,
+            content: createdArticle.content,
+            organizationId: selectedOrg.id
+          }),
+        });
+      } catch (error) {
+        console.error('Error storing embeddings:', error);
+        // Don't throw here, as the article is already saved
+      }
 
       // Close the modal
       setIsNewArticleModalOpen(false);
@@ -534,6 +596,7 @@ const HelpCenterView = () => {
           </button>
 
           <button
+            onClick={() => navigate('/agentDali')}
             className={`p-2 rounded hover:bg-[#F5E6D3] ${
               selectedNav === 'ai' ? 'bg-[#F5E6D3]' : ''
             }`}
@@ -573,9 +636,6 @@ const HelpCenterView = () => {
         <div className="p-6 border-b border-[#8B4513]">
           <div className="flex items-center justify-between h-9">
             <h2 className="text-xl font-semibold text-[#3C1810]">Knowledge Bar</h2>
-            <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
-              <IconPlus size={20} />
-            </button>
           </div>
         </div>
 
@@ -892,12 +952,62 @@ const HelpCenterView = () => {
                   className="w-full text-lg text-[#5C2E0E] bg-transparent border-none outline-none mb-6"
                   placeholder="Describe your article to help it get found"
                 />
-                <textarea
-                  value={selectedArticle.content}
-                  onChange={(e) => setSelectedArticle({ ...selectedArticle, content: e.target.value })}
-                  className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none"
-                  placeholder="Start writing..."
-                />
+                <div className="flex items-center justify-end mb-4">
+                  <button
+                    onClick={async () => {
+                      if (!selectedOrg?.id || !selectedArticle.title) {
+                        return;
+                      }
+                      
+                      if (!selectedArticle.collection_id) {
+                        alert('Please select a collection first');
+                        return;
+                      }
+                      
+                      setIsGeneratingArticle(true);
+                      try {
+                        const article = await generateArticle({
+                          title: selectedArticle.title,
+                          description: selectedArticle.description || '',
+                          organizationId: selectedOrg.id,
+                          collectionId: selectedArticle.collection_id
+                        });
+                        
+                        if (selectedArticle) {
+                          setSelectedArticle({
+                            ...selectedArticle,
+                            content: article.content || ''
+                          });
+                        }
+                      } catch (error) {
+                        console.error('Error generating article:', error);
+                      } finally {
+                        setIsGeneratingArticle(false);
+                      }
+                    }}
+                    disabled={isGeneratingArticle}
+                    className={`px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center gap-2 ${
+                      isGeneratingArticle ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
+                    {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
+                  </button>
+                </div>
+                <div className="relative group">
+                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                    <div className="flex items-center bg-[#FDF6E3] border border-[#8B4513] rounded px-2 py-1 shadow-lg">
+                      <img src="/favicon.ico" alt="Tooltip" className="w-4 h-4 mr-2" />
+                      <span className="text-sm text-[#3C1810]">Ask Agent Dali to write this article for you</span>
+                    </div>
+                  </div>
+                  <textarea
+                    value={selectedArticle.content}
+                    onChange={(e) => setSelectedArticle({ ...selectedArticle, content: e.target.value })}
+                    className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
+                    placeholder="Start writing..."
+                  />
+                </div>
               </div>
 
               {/* Details Sidebar */}
@@ -1107,12 +1217,60 @@ const HelpCenterView = () => {
                   className="w-full text-lg text-[#5C2E0E] bg-transparent border-none outline-none mb-6"
                   placeholder="Describe your article to help it get found"
                 />
-                <textarea
-                  value={newArticle.content}
-                  onChange={(e) => setNewArticle({ ...newArticle, content: e.target.value })}
-                  className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none"
-                  placeholder="Start writing..."
-                />
+                <div className="flex items-center justify-end mb-4">
+                  <button
+                    onClick={async () => {
+                      if (!selectedOrg?.id || !newArticle.title) {
+                        return;
+                      }
+                      
+                      if (!newArticle.collection_id) {
+                        alert('Please select a collection first');
+                        return;
+                      }
+                      
+                      setIsGeneratingArticle(true);
+                      try {
+                        const article = await generateArticle({
+                          title: newArticle.title,
+                          description: newArticle.description || '',
+                          organizationId: selectedOrg.id,
+                          collectionId: newArticle.collection_id
+                        });
+                        
+                        setNewArticle(prev => ({
+                          ...prev,
+                          content: article.content || ''
+                        }));
+                      } catch (error) {
+                        console.error('Error generating article:', error);
+                      } finally {
+                        setIsGeneratingArticle(false);
+                      }
+                    }}
+                    disabled={isGeneratingArticle}
+                    className={`px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center gap-2 ${
+                      isGeneratingArticle ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
+                    {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
+                  </button>
+                </div>
+                <div className="relative group">
+                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                    <div className="flex items-center bg-[#FDF6E3] border border-[#8B4513] rounded px-2 py-1 shadow-lg">
+                      <img src="/favicon.ico" alt="Tooltip" className="w-4 h-4 mr-2" />
+                      <span className="text-sm text-[#3C1810]">Click to edit</span>
+                    </div>
+                  </div>
+                  <textarea
+                    value={newArticle.content}
+                    onChange={(e) => setNewArticle({ ...newArticle, content: e.target.value })}
+                    className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
+                    placeholder="Start writing..."
+                  />
+                </div>
               </div>
 
               {/* Details Sidebar */}

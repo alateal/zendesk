@@ -52,6 +52,28 @@ const getCurrentUser = async () => {
   }
 };
 
+// Remove AIService import and add generateArticle function
+const generateArticle = async (params: {
+  title: string;
+  description: string;
+  organizationId: string;
+  collectionId?: string;
+}) => {
+  const response = await fetch('/api/ai/generate-article', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to generate article');
+  }
+
+  return response.json();
+};
+
 const KnowledgeBase = () => {
   const [selectedNav, setSelectedNav] = useState('knowledge');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -106,6 +128,8 @@ const KnowledgeBase = () => {
     lastUpdated: ''
   });
   const [dropdownPosition, setDropdownPosition] = useState({ top: 0, right: 0 });
+  // Add isGeneratingArticle state
+  const [isGeneratingArticle, setIsGeneratingArticle] = useState(false);
 
   // Add authentication check
   useEffect(() => {
@@ -423,10 +447,21 @@ const KnowledgeBase = () => {
   };
 
   const handleNavigation = (nav: string) => {
-    if (nav === 'inbox') {
-      navigate('/dashboard');
-    } else {
-      setSelectedNav(nav);
+    switch (nav) {
+      case 'inbox':
+        navigate('/dashboard');
+        break;
+      case 'knowledge':
+        navigate('/knowledge');
+        break;
+      case 'ai':
+        navigate('/agentDali');
+        break;
+      case 'reports':
+        navigate('/reports');
+        break;
+      default:
+        break;
     }
   };
 
@@ -489,7 +524,23 @@ const KnowledgeBase = () => {
     return `${years} ${years === 1 ? 'year' : 'years'} ago`;
   };
 
-  // Update handleCreateArticle to handle both creation and updates
+  const defaultArticleData = {
+    id: '',
+    created_at: new Date().toISOString(),
+    organizations_id: '',
+    title: '',
+    description: '',
+    content: '',
+    is_public: true,
+    is_published: false,
+    last_updated_at: null,
+    last_updated_by: null,
+    created_by: '',
+    enabled_ai: false,
+    collection_id: '',
+  };
+
+  // Update the handleCreateArticle function to handle both creation and updates
   const handleCreateArticle = async (publish: boolean = false) => {
     try {
       if (!selectedOrg || !currentUser) return;
@@ -545,31 +596,50 @@ const KnowledgeBase = () => {
           .single();
       }
 
-      const { data: article, error } = response;
-      if (error) throw error;
+      if (response.error) throw response.error;
 
-      // Close the modal
-        setArticleModalType(null);
-      
-      // Reset the form
-        setArticleData({
-          id: '',
-          created_at: new Date().toISOString(),
-          organizations_id: selectedOrg,
-          title: '',
-          description: '',
-          content: '',
-          is_public: true,
-          is_published: false,
-          last_updated_at: null,
-          last_updated_by: null,
-          created_by: currentUser.id,
-        enabled_ai: false,
-        collection_id: '',
+      // Store embeddings for all articles
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetch('/api/ai/store-embeddings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`
+          },
+          body: JSON.stringify({
+            articleId: response.data.id,
+            content: articleData.content,
+            organizationId: selectedOrg
+          }),
         });
+      } catch (error) {
+        console.error('Error storing embeddings:', error);
+        // Don't throw here, as the article is already saved
+      }
 
+      // Update articles list
+      const updatedArticle = response.data;
+      if (articleData.id) {
+        if (updatedArticle.is_public) {
+          setPublicArticles(prev => prev.map(a => a.id === articleData.id ? updatedArticle : a));
+        } else {
+          setInternalArticles(prev => prev.map(a => a.id === articleData.id ? updatedArticle : a));
+        }
+      } else {
+        if (updatedArticle.is_public) {
+          setPublicArticles(prev => [updatedArticle, ...prev]);
+        } else {
+          setInternalArticles(prev => [updatedArticle, ...prev]);
+        }
+      }
+
+      // Close modal and reset form
+      setArticleModalType(null);
+      setArticleData(defaultArticleData);
     } catch (error) {
       console.error('Error saving article:', error);
+      // Handle error (show notification, etc.)
     }
   };
 
@@ -922,9 +992,6 @@ const KnowledgeBase = () => {
         <div className="p-6 border-b border-[#8B4513]">
           <div className="flex items-center justify-between h-9">
             <h2 className="text-xl font-semibold text-[#3C1810]">Knowledge Bar</h2>
-            <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
-              <IconPlus size={20} />
-            </button>
           </div>
         </div>
 
@@ -1557,12 +1624,55 @@ const KnowledgeBase = () => {
                   className="w-full text-lg text-[#5C2E0E] bg-transparent border-none outline-none mb-6 placeholder-gray-400"
                   placeholder="Describe your article to help it get found"
                 />
-                <textarea
-                  value={articleData.content}
-                  onChange={(e) => setArticleData({ ...articleData, content: e.target.value })}
-                  className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none"
-                  placeholder="Start writing..."
-                />
+                <div className="flex items-center justify-end mb-4">
+                  <button
+                    onClick={async () => {
+                      if (!selectedOrg?.id || !articleData.title) {
+                        return;
+                      }
+                      
+                      setIsGeneratingArticle(true);
+                      try {
+                        const article = await generateArticle({
+                          title: articleData.title,
+                          description: articleData.description || '',
+                          organizationId: selectedOrg.id,
+                          collectionId: articleData.collection_id
+                        });
+                        
+                        setArticleData(prev => ({
+                          ...prev,
+                          content: article.content || ''
+                        }));
+                      } catch (error) {
+                        console.error('Error generating article:', error);
+                      } finally {
+                        setIsGeneratingArticle(false);
+                      }
+                    }}
+                    disabled={isGeneratingArticle}
+                    className={`px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center gap-2 ${
+                      isGeneratingArticle ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
+                    {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
+                  </button>
+                </div>
+                <div className="relative group">
+                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                    <div className="flex items-center bg-[#FDF6E3] border border-[#8B4513] rounded px-2 py-1 shadow-lg">
+                      <img src="/favicon.ico" alt="Tooltip" className="w-4 h-4 mr-2" />
+                      <span className="text-sm text-[#3C1810]">Ask Agent Dali to write this article for you</span>
+                    </div>
+                  </div>
+                  <textarea
+                    value={articleData.content}
+                    onChange={(e) => setArticleData({ ...articleData, content: e.target.value })}
+                    className="w-full h-[calc(100%-200px)] text-[#3C1810] bg-transparent border-none outline-none resize-none hover:bg-[#F5E6D3] transition-colors duration-200 p-2 rounded"
+                    placeholder="Start writing..."
+                  />
+                </div>
               </div>
 
               {/* Details Sidebar */}

@@ -12,6 +12,7 @@ import HelpCenterView from './components/HelpCenterView'
 import Preview from './components/Preview'
 import CollectionView from './components/CollectionView'
 import ArticleView from './components/ArticleView'
+import AgentDali from './components/AgentDali'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -27,6 +28,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/knowledge/help/preview/collection/:id" element={<CollectionView />} />
         <Route path="/knowledge/help/preview/article/:id" element={<ArticleView />} />
         <Route path="/chanel" element={<Chanel />} />
+        <Route path="/agentDali" element={<AgentDali />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,
