@@ -548,43 +548,17 @@ const KnowledgeBase = () => {
     collection_id: '',
   };
 
-  // Update the handleCreateArticle function to handle both creation and updates
+  // Modify the handleCreateArticle function to not automatically generate content
   const handleCreateArticle = async (publish: boolean = false) => {
     try {
       if (!selectedOrg || !currentUser) return;
       
-      setIsGeneratingArticle(true);
-      
-      // Get the session for auth
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      // Changed endpoint from /api/ai/generate-article to /api/ai/generate-enhanced-article
-      const generateResponse = await fetch('/api/ai/generate-enhanced-article', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`
-        },
-        body: JSON.stringify({
-          title: articleData.title,
-          description: articleData.description,
-          organizationId: selectedOrg,
-          collectionId: articleData.collection_id
-        }),
-      });
-
-      if (!generateResponse.ok) {
-        throw new Error('Failed to generate article');
-      }
-
-      const { content } = await generateResponse.json();
-
-      // Prepare article data with generated content
+      // Prepare article data with current content
       const articleToSave = {
         organizations_id: selectedOrg,
         title: articleData.title,
         description: articleData.description,
-        content: content, // Use the generated content
+        content: articleData.content,
         is_public: articleModalType === 'public',
         is_published: publish,
         last_updated_at: new Date().toISOString(),
@@ -633,35 +607,29 @@ const KnowledgeBase = () => {
 
       if (response.error) throw response.error;
 
-      // Store embeddings for the article
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const embeddingResponse = await fetch('/api/ai/store-embeddings', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token}`
-          },
-          body: JSON.stringify({
-            articleId: response.data.id,
-            content: content,
-            organizationId: selectedOrg
-          }),
-        });
+      // Store embeddings for the article if it has content
+      if (articleData.content) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const embeddingResponse = await fetch('/api/ai/store-embeddings', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session?.access_token}`
+            },
+            body: JSON.stringify({
+              articleId: response.data.id,
+              content: articleData.content,
+              organizationId: selectedOrg
+            }),
+          });
 
-        if (!embeddingResponse.ok) {
-          throw new Error('Failed to store embeddings');
+          if (!embeddingResponse.ok) {
+            throw new Error('Failed to store embeddings');
+          }
+        } catch (error) {
+          console.error('Error storing embeddings:', error);
         }
-
-        const embeddingData = await embeddingResponse.json();
-        
-        setArticleData(prev => ({
-          ...prev,
-          embedding_id: embeddingData.embedding_id
-        }));
-      } catch (error) {
-        console.error('Error storing embeddings:', error);
-        // Don't throw here, as the article is already saved
       }
 
       // Update articles list
@@ -680,13 +648,64 @@ const KnowledgeBase = () => {
         }
       }
 
-      // Close modal and reset form
+      // Reset form and close modal
       setArticleModalType(null);
       setArticleData(defaultArticleData);
 
     } catch (error) {
       console.error('Error saving article:', error);
-      // Handle error (show notification, etc.)
+      setErrorModal({
+        isOpen: true,
+        message: 'Failed to save article'
+      });
+    }
+  };
+
+  // Separate function for AI generation
+  const handleGenerateWithAI = async () => {
+    if (!selectedOrg || !articleData.title) {
+      if (!articleData.title) {
+        setErrorModal({
+          isOpen: true,
+          message: 'Please enter a title for the article'
+        });
+      }
+      return;
+    }
+    
+    setIsGeneratingArticle(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch('/api/ai/generate-enhanced-article', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({
+          title: articleData.title,
+          description: articleData.description || '',
+          organizationId: selectedOrg,
+          collectionId: articleData.collection_id
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate article');
+      }
+
+      const { content } = await response.json();
+      
+      setArticleData(prev => ({
+        ...prev,
+        content: content || ''
+      }));
+    } catch (error) {
+      console.error('Error generating article:', error);
+      setErrorModal({
+        isOpen: true,
+        message: 'Failed to generate article content'
+      });
     } finally {
       setIsGeneratingArticle(false);
     }
@@ -1750,11 +1769,11 @@ const KnowledgeBase = () => {
                           throw new Error('Failed to generate article');
                         }
 
-                        const article = await response.json();
+                        const { content } = await response.json();
                         
                         setArticleData(prev => ({
                           ...prev,
-                          content: article.content || ''
+                          content: content || ''
                         }));
                       } catch (error) {
                         console.error('Error generating article:', error);

@@ -98,17 +98,6 @@
 
 ---
 
-## `ai_research_chunks`
-- **id**: `uuid` (Primary Key)
-- **created_at**: `timestamptz`
-- **organizations_id**: `uuid` (Foreign Key to `organizations.id`)
-- **content**: `text`
-- **embedding**: `vector`
-- **metadata**: `jsonb`
-- **source_url**: `text`
-
----
-
 ## `ai_prompts`
 - **id**: `uuid` (Primary Key)
 - **created_at**: `timestamptz`
