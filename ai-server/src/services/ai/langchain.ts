@@ -115,7 +115,7 @@ export class LangchainService {
       // First, get relevant competitors based on the organization's name
       const competitorSearch = await this.tavilyClient.search(
         `${orgData.name} top luxury brand competitors market analysis`, {
-          searchDepth: "basic",
+          searchDepth: "advanced",
           maxResults: 2
         }
       );

@@ -963,6 +963,11 @@ const KnowledgeBase = () => {
     </div>
   );
 
+  // First, let's add a helper function near the top of the component to check if title is default
+  const isDefaultTitle = (title: string, type: 'public' | 'internal' | null) => {
+    return !title || title === `Untitled ${type} article`;
+  };
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar - Same as Dashboard */}
@@ -1736,63 +1741,33 @@ const KnowledgeBase = () => {
                   placeholder="Describe your article to help it get found"
                 />
                 <div className="flex items-center justify-end mb-4">
-                  <button
-                    onClick={async () => {
-                      if (!selectedOrg || !articleData.title) {
-                        if (!articleData.title) {
-                          setErrorModal({
-                            isOpen: true,
-                            message: 'Please enter a title for the article'
-                          });
-                        }
-                        return;
-                      }
-                      
-                      setIsGeneratingArticle(true);
-                      try {
-                        const { data: { session } } = await supabase.auth.getSession();
-                        const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${session?.access_token}`
-                          },
-                          body: JSON.stringify({
-                            title: articleData.title,
-                            description: articleData.description || '',
-                            organizationId: selectedOrg,
-                            collectionId: articleData.collection_id
-                          }),
-                        });
-
-                        if (!response.ok) {
-                          throw new Error('Failed to generate article');
-                        }
-
-                        const { content } = await response.json();
-                        
-                        setArticleData(prev => ({
-                          ...prev,
-                          content: content || ''
-                        }));
-                      } catch (error) {
-                        console.error('Error generating article:', error);
-                        setErrorModal({
-                          isOpen: true,
-                          message: 'Failed to generate article. Please try again.'
-                        });
-                      } finally {
-                        setIsGeneratingArticle(false);
-                      }
-                    }}
-                    disabled={isGeneratingArticle}
-                    className={`px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center gap-2 ${
-                      isGeneratingArticle ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
-                    {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={handleGenerateWithAI}
+                      disabled={isDefaultTitle(articleData.title, articleModalType) || isGeneratingArticle}
+                      className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                        isDefaultTitle(articleData.title, articleModalType)
+                          ? 'bg-[#D4B69C] text-[#8B4513] cursor-not-allowed hover:bg-[#D4B69C]' 
+                          : isGeneratingArticle
+                          ? 'bg-[#8B4513] text-[#FDF6E3] opacity-50 cursor-not-allowed'
+                          : 'bg-[#8B4513] text-[#FDF6E3] hover:bg-[#5C2E0E]'
+                      }`}
+                    >
+                      <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
+                      {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
+                    </button>
+                    
+                    {/* Tooltip for disabled state - Updated positioning */}
+                    {isDefaultTitle(articleData.title, articleModalType) && (
+                      <div className="absolute bottom-full right-0 mb-2 w-64">
+                        <div className="bg-[#FDF6E3] border border-[#8B4513] rounded-lg px-4 py-2 shadow-lg">
+                          <p className="text-sm text-[#3C1810] text-center">
+                            Unlock the magic by letting AI Dali knows the title of your article.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="relative group">
                   <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">

@@ -88,6 +88,10 @@ const generateArticle = async (params: {
   return response.json();
 };
 
+const isDefaultTitle = (title: string) => {
+  return !title || title === 'Untitled public article';
+};
+
 const HelpCenterView = () => {
   const navigate = useNavigate();
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -345,12 +349,19 @@ const HelpCenterView = () => {
     const fetchFullArticle = async () => {
       const { data } = await supabase
         .from('articles')
-        .select('*')
+        .select(`
+          *,
+          collections (
+            id,
+            title
+          )
+        `)
         .eq('id', article.id)
         .single();
       
       if (data) {
         setSelectedArticle(data);
+        setIsArticleModalOpen(true);
       }
     };
 
@@ -1004,46 +1015,61 @@ const HelpCenterView = () => {
                   placeholder="Describe your article to help it get found"
                 />
                 <div className="flex items-center justify-end mb-4">
-                  <button
-                    onClick={async () => {
-                      if (!selectedOrg?.id || !selectedArticle.title) {
-                        return;
-                      }
-                      
-                      if (!selectedArticle.collection_id) {
-                        alert('Please select a collection first');
-                        return;
-                      }
-                      
-                      setIsGeneratingArticle(true);
-                      try {
-                        const article = await generateArticle({
-                          title: selectedArticle.title,
-                          description: selectedArticle.description || '',
-                          organizationId: selectedOrg.id,
-                          collectionId: selectedArticle.collection_id
-                        });
+                  <div className="relative">
+                    <button
+                      onClick={async () => {
+                        if (!selectedOrg?.id || !selectedArticle.title) return;
                         
-                        if (selectedArticle) {
-                          setSelectedArticle({
-                            ...selectedArticle,
-                            content: article.content || ''
-                          });
+                        if (!selectedArticle.collection_id) {
+                          alert('Please select a collection first');
+                          return;
                         }
-                      } catch (error) {
-                        console.error('Error generating article:', error);
-                      } finally {
-                        setIsGeneratingArticle(false);
-                      }
-                    }}
-                    disabled={isGeneratingArticle}
-                    className={`px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center gap-2 ${
-                      isGeneratingArticle ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
-                    {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
-                  </button>
+                        
+                        setIsGeneratingArticle(true);
+                        try {
+                          const article = await generateArticle({
+                            title: selectedArticle.title,
+                            description: selectedArticle.description || '',
+                            organizationId: selectedOrg.id,
+                            collectionId: selectedArticle.collection_id
+                          });
+                          
+                          if (selectedArticle) {
+                            setSelectedArticle({
+                              ...selectedArticle,
+                              content: article.content || ''
+                            });
+                          }
+                        } catch (error) {
+                          console.error('Error generating article:', error);
+                        } finally {
+                          setIsGeneratingArticle(false);
+                        }
+                      }}
+                      disabled={isDefaultTitle(selectedArticle.title) || isGeneratingArticle}
+                      className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                        isDefaultTitle(selectedArticle.title)
+                          ? 'bg-[#D4B69C] text-[#8B4513] cursor-not-allowed hover:bg-[#D4B69C]' 
+                          : isGeneratingArticle
+                          ? 'bg-[#8B4513] text-[#FDF6E3] opacity-50 cursor-not-allowed'
+                          : 'bg-[#8B4513] text-[#FDF6E3] hover:bg-[#5C2E0E]'
+                      }`}
+                    >
+                      <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
+                      {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
+                    </button>
+                    
+                    {/* Tooltip for disabled state */}
+                    {isDefaultTitle(selectedArticle.title) && (
+                      <div className="absolute bottom-full right-0 mb-2 w-64">
+                        <div className="bg-[#FDF6E3] border border-[#8B4513] rounded-lg px-4 py-2 shadow-lg">
+                          <p className="text-sm text-[#3C1810] text-center">
+                            Unlock the magic by letting AI Dali knows the title of your article.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="relative group">
                   <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
@@ -1269,44 +1295,59 @@ const HelpCenterView = () => {
                   placeholder="Describe your article to help it get found"
                 />
                 <div className="flex items-center justify-end mb-4">
-                  <button
-                    onClick={async () => {
-                      if (!selectedOrg?.id || !newArticle.title) {
-                        return;
-                      }
-                      
-                      if (!newArticle.collection_id) {
-                        alert('Please select a collection first');
-                        return;
-                      }
-                      
-                      setIsGeneratingArticle(true);
-                      try {
-                        const article = await generateArticle({
-                          title: newArticle.title,
-                          description: newArticle.description || '',
-                          organizationId: selectedOrg.id,
-                          collectionId: newArticle.collection_id
-                        });
+                  <div className="relative">
+                    <button
+                      onClick={async () => {
+                        if (!selectedOrg?.id || !newArticle.title) return;
                         
-                        setNewArticle(prev => ({
-                          ...prev,
-                          content: article.content || ''
-                        }));
-                      } catch (error) {
-                        console.error('Error generating article:', error);
-                      } finally {
-                        setIsGeneratingArticle(false);
-                      }
-                    }}
-                    disabled={isGeneratingArticle}
-                    className={`px-4 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center gap-2 ${
-                      isGeneratingArticle ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
-                    {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
-                  </button>
+                        if (!newArticle.collection_id) {
+                          alert('Please select a collection first');
+                          return;
+                        }
+                        
+                        setIsGeneratingArticle(true);
+                        try {
+                          const article = await generateArticle({
+                            title: newArticle.title,
+                            description: newArticle.description || '',
+                            organizationId: selectedOrg.id,
+                            collectionId: newArticle.collection_id
+                          });
+                          
+                          setNewArticle(prev => ({
+                            ...prev,
+                            content: article.content || ''
+                          }));
+                        } catch (error) {
+                          console.error('Error generating article:', error);
+                        } finally {
+                          setIsGeneratingArticle(false);
+                        }
+                      }}
+                      disabled={isDefaultTitle(newArticle.title) || isGeneratingArticle}
+                      className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+                        isDefaultTitle(newArticle.title)
+                          ? 'bg-[#D4B69C] text-[#8B4513] cursor-not-allowed hover:bg-[#D4B69C]' 
+                          : isGeneratingArticle
+                          ? 'bg-[#8B4513] text-[#FDF6E3] opacity-50 cursor-not-allowed'
+                          : 'bg-[#8B4513] text-[#FDF6E3] hover:bg-[#5C2E0E]'
+                      }`}
+                    >
+                      <IconRobot size={20} className={isGeneratingArticle ? 'animate-spin' : ''} />
+                      {isGeneratingArticle ? 'Generating...' : 'Generate with AI'}
+                    </button>
+                    
+                    {/* Tooltip for disabled state */}
+                    {isDefaultTitle(newArticle.title) && (
+                      <div className="absolute bottom-full right-0 mb-2 w-64">
+                        <div className="bg-[#FDF6E3] border border-[#8B4513] rounded-lg px-4 py-2 shadow-lg">
+                          <p className="text-sm text-[#3C1810] text-center">
+                            Unlock the magic by letting AI Dali knows the title of your article.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="relative group">
                   <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
