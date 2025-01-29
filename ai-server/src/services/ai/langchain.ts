@@ -46,58 +46,6 @@ export class LangchainService {
     this.tavilyClient = tavily({ apiKey: config.tavilyApiKey });
   }
 
-  private async storeEmbeddings(docs: Document[], organizationId: string) {
-    for (const doc of docs) {
-      const embedding = await this.embeddings.embedQuery(doc.pageContent);
-      
-      await this.supabase
-        .from('ai_research_chunks')
-        .insert({
-          organizations_id: organizationId,
-          content: doc.pageContent,
-          embedding,
-          metadata: doc.metadata,
-          source_url: doc.metadata.source
-        });
-    }
-  }
-
-  private async getSimilarContent(query: string, organizationId: string, limit: number = 5) {
-    console.log('🔍 Starting semantic search...');
-    const queryEmbedding = await this.embeddings.embedQuery(query);
-    
-    // First try to get articles from the same collection for closest style match
-    const { data: collectionChunks } = await this.supabase.rpc('match_content', {
-      query_embedding: queryEmbedding,
-      match_threshold: 0.88, // Increased threshold for closer matches
-      match_count: 3,
-      p_organization_id: organizationId
-    });
-
-    // Then get articles from the entire organization
-    const { data: orgChunks } = await this.supabase.rpc('match_content', {
-      query_embedding: queryEmbedding,
-      match_threshold: 0.85,
-      match_count: limit,
-      p_organization_id: organizationId
-    });
-
-    const combinedChunks = [...(collectionChunks || []), ...(orgChunks || [])];
-    
-    // Remove duplicates and sort by similarity
-    const uniqueChunks = Array.from(new Set(combinedChunks.map(c => c.id)))
-      .map(id => combinedChunks.find(c => c.id === id))
-      .filter(Boolean)
-      .slice(0, limit);
-
-    console.log('📊 Found similar articles:');
-    uniqueChunks.forEach((chunk, i) => {
-      console.log(`${i + 1}. Article ID: ${chunk.id}, Similarity: ${chunk.similarity}`);
-    });
-
-    return uniqueChunks;
-  }
-
   private async scrapeAndProcessUrl(url: string): Promise<Document[]> {
     try {
       const loader = new CheerioWebBaseLoader(url, {
@@ -124,62 +72,65 @@ export class LangchainService {
 
   private async searchHelpCenterArticles(topic: string, organizationId: string): Promise<string[]> {
     try {
-      // First get organization name from Supabase
-      const { data: orgData, error: orgError } = await this.supabase
+      // Get organization name from Supabase
+      const { data: orgData } = await this.supabase
         .from('organizations')
         .select('name')
         .eq('id', organizationId)
         .single();
 
-      if (orgError || !orgData) {
-        console.error('❌ Error getting organization name:', orgError);
-        return this.searchIndustryHelpCenters(topic);
-      }
+      if (!orgData) return this.searchIndustryHelpCenters(topic);
 
       const orgName = orgData.name;
       console.log('🔍 Analyzing competitors for:', orgName);
 
-      // First search for competitors
-      const competitorSearch = await this.tavilyClient.search(`${orgName} main competitors brands market analysis`, {
-        searchDepth: "advanced",
-        maxResults: 3
-      });
+      // Search for direct competitors
+      const competitorSearch = await this.tavilyClient.search(
+        `${orgName} luxury brand main competitors market analysis`, {
+          searchDepth: "advanced",
+          maxResults: 3
+        }
+      );
+
+      console.log('📊 Market research results:', 
+        competitorSearch.results.map(r => ({
+          title: r.title,
+          content: r.content.substring(0, 200) + '...'
+        }))
+      );
 
       // Extract competitor names
       const competitorAnalysis = await this.model.invoke(
-        `Based on this market research, list the top 3 direct competitors of ${orgName}.
-         
-         Market Research:
-         ${competitorSearch.results.map(r => r.content).join('\n\n')}
-
-         Return ONLY a JSON array of competitor names, no other text.
-         Example: ["Brand1", "Brand2", "Brand3"]`
+        `List the top 3 luxury brand competitors of ${orgName}.
+         Market Research: ${competitorSearch.results.map(r => r.content).join('\n')}
+         Return ONLY a JSON array of competitor names.`
       );
 
-      let competitors;
-      try {
-        competitors = JSON.parse(competitorAnalysis.content.trim());
-      } catch (e) {
-        console.error('Failed to parse competitor list, using default search');
-        return this.searchIndustryHelpCenters(topic);
-      }
+      const competitors = JSON.parse(competitorAnalysis.content.toString().trim());
+      console.log('🎯 Identified competitors:', competitors);
 
-      // Now search for help content from each competitor separately
+      // Search for help center content from luxury competitors
       const allResults = [];
       for (const competitor of competitors) {
         const results = await this.tavilyClient.search(
-          `${competitor} ${topic} help center support article`, {
+          `${competitor} ${topic} official help center customer service`, {
             searchDepth: "advanced",
             maxResults: 2
           }
         );
+        console.log(`Found ${results.results.length} articles:`, 
+          results.results.map(r => ({
+            url: r.url,
+            title: r.title,
+            snippet: r.content.substring(0, 150) + '...'
+          }))
+        );
         allResults.push(...results.results);
       }
 
-      console.log('📊 Found competitor content from:', competitors);
       return allResults.map(result => result.url);
     } catch (error) {
-      console.error('❌ Error analyzing market competitors:', error);
+      console.error('❌ Error analyzing competitors:', error);
       return this.searchIndustryHelpCenters(topic);
     }
   }
@@ -211,7 +162,7 @@ export class LangchainService {
 
   async learnFromHelpCenters(topic: string, organizationId: string): Promise<string> {
     try {
-      console.log('🔍 Learning from help centers about:', topic);
+      console.log('\n🔍 Learning from help centers about:', topic);
       const urls = await this.searchHelpCenterArticles(topic, organizationId);
       
       const docs = await this.processHelpCenterUrls(urls);
@@ -221,9 +172,9 @@ export class LangchainService {
       const limitedContent = docs
         .map(d => d.pageContent)
         .join('\n\n')
-        .slice(0, 6000); // Roughly 2000 tokens
+        .slice(0, 6000);
 
-      console.log('🧠 Analyzing content patterns...');
+      console.log('\n🧠 Analyzing competitor approaches...');
       const analysis = await this.model.invoke(
         `Analyze these help center articles concisely:
          1. Key points about ${topic}
@@ -233,6 +184,7 @@ export class LangchainService {
          Articles: ${limitedContent}`
       );
 
+      console.log('\n📝 Competitor analysis result:', analysis.content.toString());
       return analysis.content;
     } catch (error) {
       console.error('❌ Error learning from help centers:', error);
@@ -265,55 +217,38 @@ export class LangchainService {
   }): Promise<string> {
     const { title, description, organizationId } = params;
 
-    // Get most similar content but limit amount
-    const similarContent = await this.getSimilarContent(
-      `${title} ${description}`,
-      organizationId,
-      3 // Reduced from 5 to 3
-    );
-
-    // Take only essential content from each article
-    const limitedSimilarContent = similarContent.map(doc => ({
-      ...doc,
-      content: doc.content.slice(0, 2000) // Limit each article
-    }));
-
-    // Analyze brand voice with limited content
-    const brandVoiceAnalysis = await this.model.invoke(
-      `Analyze brand voice briefly:
-       ${limitedSimilarContent.map(doc => doc.content).join('\n\n')}
-
-       Return concise JSON:
-       {
-         "tone": "tone summary",
-         "terminology": ["key terms"],
-         "style": "writing style"
-       }`
-    );
-
-    // Get competitor insights (already limited in learnFromHelpCenters)
+    // Research how competitors handle this topic
+    console.log('🔍 Researching competitor approaches...');
     const competitorInsights = await this.learnFromHelpCenters(title, organizationId);
 
-    // Generate with limited context
+    // Generate professional, brand-appropriate content
     const response = await this.model.invoke(
-      `Write help center article matching brand voice exactly.
-
-       VOICE:
-       ${brandVoiceAnalysis.content}
-
-       REFERENCE:
-       ${limitedSimilarContent[0]?.content || ''}
+      `You are writing a luxury brand help center article.
 
        TOPIC: ${title}
        CONTEXT: ${description}
 
-       KEY POINTS:
+       COMPETITOR INSIGHTS:
        ${competitorInsights}
 
-       Match brand voice precisely. Be concise.`
+       STYLE GUIDE:
+       - Be precise and elegant
+       - Include only essential information
+       - Use respectful, sophisticated language
+       - Maintain the brand's prestige
+       - No redundant explanations
+       - Do not use quotation marks
+
+       EXAMPLE FORMAT:
+       For CHANEL repair services, we recommend visiting your nearest CHANEL Boutique where an advisor can assist you.
+       
+       Contact our Client Care Advisors online or by telephone at 1.800.550.0005, available 7 AM to 12 AM ET.
+
+       Write a concise, sophisticated response without quotation marks.`
     );
 
-    return response.content;
+    // Remove any remaining quotation marks from the response
+    return response.content.toString().replace(/['"]/g, '');
   }
 }
 
