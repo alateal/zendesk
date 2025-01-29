@@ -59,7 +59,7 @@ const generateArticle = async (params: {
   organizationId: string;
   collectionId?: string;
 }) => {
-  const response = await fetch('http://localhost:3001/ai/generate-article', {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-article`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -611,7 +611,7 @@ const KnowledgeBase = () => {
       if (articleData.content) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
-          const embeddingResponse = await fetch('/api/ai/store-embeddings', {
+          const embeddingResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/store-embeddings`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -676,7 +676,7 @@ const KnowledgeBase = () => {
     setIsGeneratingArticle(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch('/api/ai/generate-enhanced-article', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1751,7 +1751,7 @@ const KnowledgeBase = () => {
                       setIsGeneratingArticle(true);
                       try {
                         const { data: { session } } = await supabase.auth.getSession();
-                        const response = await fetch('/api/ai/generate-enhanced-article', {
+                        const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
                           method: 'POST',
                           headers: {
                             'Content-Type': 'application/json',

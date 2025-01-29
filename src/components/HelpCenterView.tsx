@@ -395,7 +395,7 @@ const HelpCenterView = () => {
       // Store embeddings for all articles
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        const embeddingResponse = await fetch('http://localhost:3001/ai/store-embeddings', {
+        const embeddingResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/store-embeddings`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -482,7 +482,7 @@ const HelpCenterView = () => {
       // Store embeddings for all articles
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        const embeddingResponse = await fetch('http://localhost:3001/ai/store-embeddings', {
+        const embeddingResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/store-embeddings`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
