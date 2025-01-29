@@ -7,6 +7,9 @@ import { Document } from "langchain/document";
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../../config/environment';
 import { tavily } from "@tavily/core";
+import { Client, RunTree } from "langsmith";
+import { LangChainTracer } from "langchain/callbacks";
+import { CallbackManager } from "@langchain/core/callbacks/manager";
 
 export class LangchainService {
   private model: ChatOpenAI;
@@ -14,21 +17,46 @@ export class LangchainService {
   private browser: WebBrowser;
   private supabase;
   private tavilyClient;
+  private tracer: LangChainTracer;
+  private client: Client;
+  private callbackManager: CallbackManager;
 
   constructor() {
     if (!config.openaiKey) {
       throw new Error('OpenAI API key is required');
     }
 
+    if (!config.langsmithApiKey || !config.langsmithProjectName) {
+      throw new Error('LangSmith configuration is required');
+    }
+
+    // Enable background callbacks
+    process.env.LANGCHAIN_CALLBACKS_BACKGROUND = 'true';
+
+    // Initialize LangSmith client
+    this.client = new Client({
+      apiKey: config.langsmithApiKey,
+      projectName: config.langsmithProjectName
+    });
+
+    // Initialize tracer and callback manager
+    this.callbackManager = new CallbackManager();
+    this.tracer = new LangChainTracer({
+      projectName: config.langsmithProjectName
+    });
+    this.callbackManager.addHandler(this.tracer);
+
     this.model = new ChatOpenAI({
       openAIApiKey: config.openaiKey,
       modelName: "gpt-4",
       temperature: 0.7,
+      callbacks: this.callbackManager
     });
 
     this.embeddings = new OpenAIEmbeddings({
       openAIApiKey: config.openaiKey,
       modelName: "text-embedding-3-small",
+      callbacks: this.callbackManager
     });
 
     this.browser = new WebBrowser({ model: this.model, embeddings: this.embeddings });
@@ -239,49 +267,109 @@ export class LangchainService {
     organizationId: string;
     collectionId?: string;
   }): Promise<string> {
-    const { title, description, organizationId } = params;
+    // Create parent run tree with proper configuration
+    const parentRunConfig = {
+      name: "Generate Enhanced Article",
+      run_type: "chain",
+      inputs: {
+        title: params.title,
+        description: params.description,
+        organizationId: params.organizationId
+      }
+    };
 
-    // Get organization name for brand voice
-    const { data: orgData } = await this.supabase
-      .from('organizations')
-      .select('name')
-      .eq('id', organizationId)
-      .single();
+    const parentRun = new RunTree(parentRunConfig);
+    await parentRun.postRun();
 
-    const brandName = orgData?.name || 'Our';
+    try {
+      const { title, description, organizationId } = params;
 
-    const [competitorInsights] = await Promise.all([
-      this.learnFromHelpCenters(title, organizationId)
-    ]);
+      // Get organization name for brand voice
+      const { data: orgData } = await this.supabase
+        .from('organizations')
+        .select('name')
+        .eq('id', organizationId)
+        .single();
 
-    const response = await this.model.invoke(
-      `You are writing a help center article as ${brandName}'s official customer service representative.
+      const brandName = orgData?.name || 'Our';
 
-       TOPIC: ${title}
-       CONTEXT: ${description}
+      // Create child run for competitor research
+      const competitorResearchRun = await parentRun.createChild({
+        name: "Competitor Research",
+        run_type: "chain",
+        inputs: { title, organizationId }
+      });
+      await competitorResearchRun.postRun();
 
-       COMPETITOR INSIGHTS:
-       ${competitorInsights}
+      const competitorInsights = await this.learnFromHelpCenters(title, organizationId);
 
-       STYLE GUIDE:
-       - Write from ${brandName}'s perspective using "we," "our," and "us"
-       - Be precise and elegant
-       - Include only essential information
-       - Write 1-2 concise paragraphs only
-       - Each paragraph should be 2-3 sentences maximum
-       - Use respectful, sophisticated language
-       - No redundant explanations
-       - Do not use quotation marks or bullet points
+      await competitorResearchRun.end({
+        outputs: { competitorInsights }
+      });
+      await competitorResearchRun.patchRun();
 
-       EXAMPLE FORMAT:
-       For CHANEL repair services, we recommend visiting your nearest CHANEL Boutique where an advisor can assist you.
-       
-       Contact our Client Care Advisors online or by telephone at 1.800.550.0005, available 7 AM to 12 AM ET.
+      // Create child run for article generation
+      const articleGenRun = await parentRun.createChild({
+        name: "Article Generation",
+        run_type: "llm",
+        inputs: {
+          title,
+          description,
+          competitorInsights,
+          brandName
+        }
+      });
+      await articleGenRun.postRun();
 
-       Write a concise, sophisticated response in our brand voice without quotation marks.`
-    );
+      const response = await this.model.invoke(
+        `You are writing a help center article as ${brandName}'s official customer service representative.
 
-    return response.content.toString().replace(/['"]/g, '');
+         TOPIC: ${title}
+         CONTEXT: ${description}
+
+         COMPETITOR INSIGHTS:
+         ${competitorInsights}
+
+         STYLE GUIDE:
+         - Write from ${brandName}'s perspective using "we," "our," and "us"
+         - Be precise and elegant
+         - Include only essential information
+         - Write 1-2 concise paragraphs only
+         - Each paragraph should be 2-3 sentences maximum
+         - Use respectful, sophisticated language
+         - No redundant explanations
+         - Do not use quotation marks or bullet points
+
+         EXAMPLE FORMAT:
+         For CHANEL repair services, we recommend visiting your nearest CHANEL Boutique where an advisor can assist you.
+         
+         Contact our Client Care Advisors online or by telephone at 1.800.550.0005, available 7 AM to 12 AM ET.
+
+         Write a concise, sophisticated response in our brand voice without quotation marks.`
+      );
+
+      const content = response.content.toString().replace(/['"]/g, '');
+
+      await articleGenRun.end({
+        outputs: { content }
+      });
+      await articleGenRun.patchRun();
+
+      // End parent run
+      await parentRun.end({
+        outputs: { content }
+      });
+      await parentRun.patchRun(false); // false to not exclude child runs
+
+      return content;
+    } catch (error) {
+      // Log errors and end the run tree
+      await parentRun.end({
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+      await parentRun.patchRun(false);
+      throw error;
+    }
   }
 }
 
