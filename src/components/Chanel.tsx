@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { IconMessage, IconX, IconSend, IconUser, IconMail } from '@tabler/icons-react';
 import supabase from '../supabase';
 
@@ -6,6 +6,28 @@ type UserInfo = {
   fullName: string;
   email: string;
 };
+
+// Add new types
+type MessageType = 'customer' | 'agent' | 'system';
+
+interface Message {
+  id: string;
+  content: string;
+  created_at: string;
+  sender_type: MessageType;
+  is_typing?: boolean;
+}
+
+// Add new types at the top
+type ConversationStatus = 'New' | 'Active' | 'Pending_Handoff' | 'Handed_Off' | 'Closed';
+
+interface Conversation {
+  id: string;
+  status: ConversationStatus;
+  customer_id: string;
+  agent_id?: string;
+  created_at: string;
+}
 
 const Chanel = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -16,15 +38,16 @@ const Chanel = () => {
     email: ''
   });
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Array<{
-    id: string;
-    content: string;
-    created_at: string;
-    sender_type: string;
-  }>>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [rating, setRating] = useState(0);
   const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [isAiTyping, setIsAiTyping] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Add new states
+  const [conversationStatus, setConversationStatus] = useState<ConversationStatus>('New');
+  const [isHandingOff, setIsHandingOff] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
 
   useEffect(() => {
     // Load user info from localStorage on mount
@@ -38,6 +61,33 @@ const Chanel = () => {
       setConversationId(savedConversationId);
     }
   }, []);
+
+  // Add scroll to bottom effect
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // Add initial greeting when user info is set
+  useEffect(() => {
+    if (userInfo && messages.length === 0) {
+      const initialGreeting = `Hello ${userInfo.fullName}! I'm Agent Dali, CHANEL's virtual assistant. How may I assist you today?`;
+      
+      setIsAiTyping(true);
+      setTimeout(() => {
+        setMessages([{
+          id: 'greeting',
+          content: initialGreeting,
+          created_at: new Date().toISOString(),
+          sender_type: 'agent'
+        }]);
+        setIsAiTyping(false);
+      }, 1000);
+    }
+  }, [userInfo]);
 
   const handleSubmitUserInfo = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,10 +137,61 @@ const Chanel = () => {
     }
   };
 
+  const handleHumanHandoff = async () => {
+    if (!conversationId) return;
+    
+    try {
+      setIsHandingOff(true);
+      
+      // Update conversation status
+      const { error: updateError } = await supabase
+        .from('conversations')
+        .update({
+          status: 'Pending_Handoff'
+        })
+        .eq('id', conversationId);
+
+      if (updateError) {
+        console.error('Handoff update error:', updateError);
+        throw new Error('Failed to update conversation status');
+      }
+
+      setConversationStatus('Pending_Handoff');
+
+      // Send system message about handoff
+      const { error: messageError } = await supabase
+        .from('messages')
+        .insert([{
+          content: "I'm connecting you with a CHANEL Client Care Advisor. Please wait a moment.",
+          conversations_id: conversationId,
+          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+          sender_id: 'system',
+          sender_type: 'system'
+        }]);
+
+      if (messageError) {
+        console.error('Handoff message error:', messageError);
+        throw new Error('Failed to send handoff message');
+      }
+
+    } catch (error) {
+      console.error('Error in human handoff:', error);
+      // More specific error message
+      if (error instanceof Error) {
+        alert(error.message);
+      } else {
+        alert('Unable to connect to a human agent at this time. Please try again.');
+      }
+    } finally {
+      setIsHandingOff(false);
+    }
+  };
+
   const handleSendMessage = async () => {
-    if (!message.trim() || !userInfo) return;
+    if (!message.trim() || !userInfo || isHandingOff) return;
 
     try {
+      // Get customer info
       const { data: customer, error: customerError } = await supabase
         .from('customers')
         .select('id')
@@ -116,28 +217,111 @@ const Chanel = () => {
         if (conversationError) throw conversationError;
         currentConversationId = newConversation.id;
         setConversationId(newConversation.id);
-        // Save to localStorage
         localStorage.setItem('chatConversationId', newConversation.id);
       }
 
-      // Send the message
-      const { error: messageError } = await supabase
-        .from('messages')
-        .insert([{
-          content: message,
-          conversations_id: currentConversationId,
-          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-          sender_id: customer.id,
-          sender_type: 'customer'
-        }]);
+      // Update conversation status if it's new
+      if (conversationStatus === 'New') {
+        await supabase
+          .from('conversations')
+          .update({ status: 'Active' })
+          .eq('id', currentConversationId);
+        setConversationStatus('Active');
+      }
 
-      if (messageError) throw messageError;
-      
-      // Clear the input after successful send
+      // Send user message first
+      await supabase.from('messages').insert([{
+        content: message,
+        conversations_id: currentConversationId,
+        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+        sender_id: customer.id,
+        sender_type: 'customer'
+      }]);
+
+      // Clear input immediately
       setMessage('');
+
+      // Delay typing indicator by 3 seconds
+      setTimeout(() => {
+        setIsAiTyping(true);
+      }, 3000);
+
+      // Get similar articles and generate response
+      const similarResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/search-similar`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: message,
+          organizationId: '645d0512-984f-4a3a-b625-5b429b24291e'
+        }),
+      });
+
+      const similarData = await similarResponse.json();
+      let aiResponse;
+
+      if (similarData.articles && similarData.articles.length > 0) {
+        // Reset failed attempts on successful response
+        setFailedAttempts(0);
+        // Generate response from matched article
+        const aiResponseData = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-response`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            question: message,
+            articleContent: similarData.articles[0].content
+          }),
+        });
+
+        const { response } = await aiResponseData.json();
+        aiResponse = response;
+
+        // Send AI response with matched content
+        setTimeout(async () => {
+          await supabase.from('messages').insert([{
+            content: aiResponse,
+            conversations_id: currentConversationId,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            sender_id: 'ai-agent',
+            sender_type: 'agent'
+          }]);
+          setIsAiTyping(false);
+        }, 1000);
+      } else {
+        // Increment failed attempts
+        const newFailedAttempts = failedAttempts + 1;
+        setFailedAttempts(newFailedAttempts);
+
+        // Auto-initiate handoff after 3 failed attempts
+        if (newFailedAttempts >= 3) {
+          aiResponse = "I notice I haven't been able to fully address your questions. Let me connect you with a CHANEL Client Care Advisor who can better assist you.";
+          // Trigger handoff automatically
+          setTimeout(() => {
+            handleHumanHandoff();
+          }, 1000);
+        } else {
+          aiResponse = "I apologize, but I don't have specific information about that. Would you like me to connect you with a CHANEL Client Care Advisor who can better assist you?";
+        }
+
+        // Send AI response without metadata
+        setTimeout(async () => {
+          await supabase.from('messages').insert([{
+            content: aiResponse,
+            conversations_id: currentConversationId,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            sender_id: 'ai-agent',
+            sender_type: 'agent'
+          }]);
+          setIsAiTyping(false);
+        }, 1000);
+      }
 
     } catch (error) {
       console.error('Error sending message:', error);
+      setIsAiTyping(false);
       alert('Error sending message. Please try again.');
     }
   };
@@ -214,11 +398,74 @@ const Chanel = () => {
       )
       .subscribe();
 
+    // Subscribe to conversation status changes
+    const conversationChannel = supabase
+      .channel(`conversation-${conversationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'conversations',
+          filter: `id=eq.${conversationId}`
+        },
+        (payload) => {
+          if (payload.new.status) {
+            setConversationStatus(payload.new.status as ConversationStatus);
+            
+            // Handle status changes
+            if (payload.new.status === 'Handed_Off' && payload.new.agent_id) {
+              // Show human agent connected message
+              setMessages(current => [...current, {
+                id: 'system-handoff',
+                content: 'You are now connected with a CHANEL Client Care Advisor.',
+                created_at: new Date().toISOString(),
+                sender_type: 'system'
+              }]);
+            }
+          }
+        }
+      )
+      .subscribe();
+
     // Cleanup subscription
     return () => {
       channel.unsubscribe();
+      conversationChannel.unsubscribe();
     };
   }, [conversationId]);
+
+  // Add a test button temporarily
+  const testSimilarity = async () => {
+    try {
+      const response = await fetch('/api/ai/search-similar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: "How do I return an item?",
+          organizationId: "645d0512-984f-4a3a-b625-5b429b24291e" // Your org ID
+        }),
+      });
+      const data = await response.json();
+      console.log('Similar articles:', data);
+    } catch (error) {
+      console.error('Error:', error);
+    }
+  };
+
+  // Add typing indicator component
+  const TypingIndicator = () => (
+    <div className="flex items-center space-x-2 p-3 bg-white border border-black rounded-lg">
+      <div className="flex space-x-1">
+        <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+        <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+        <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+      </div>
+      <span className="text-sm text-gray-500">Agent Dali is typing...</span>
+    </div>
+  );
 
   return (
     <div 
@@ -328,37 +575,60 @@ const Chanel = () => {
               <>
                 {/* Messages Area */}
                 <div className="flex-1 overflow-y-auto p-4">
-                  {/* Welcome message */}
-                  <div className="bg-white rounded-lg p-3 mb-2 border border-black">
-                    <p className="text-black">
-                      Welcome {userInfo.fullName}! How can we assist you today?
-                    </p>
-                  </div>
-                  
-                  {/* Chat messages */}
-                  {messages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={`mb-2 ${
+                  {/* Status indicator */}
+                  {conversationStatus !== 'New' && (
+                    <div className="text-center mb-4">
+                      <span className={`text-xs px-2 py-1 rounded ${
+                        conversationStatus === 'Active' ? 'bg-green-100 text-green-800' :
+                        conversationStatus === 'Pending_Handoff' ? 'bg-yellow-100 text-yellow-800' :
+                        conversationStatus === 'Handed_Off' ? 'bg-blue-100 text-blue-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>
+                        {conversationStatus.replace('_', ' ')}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Messages with handoff button */}
+                  {messages.map((msg, index) => (
+                    <div key={`${msg.id}-${index}`}>
+                      <div className={`mb-2 ${
                         msg.sender_type === 'customer' ? 'ml-auto' : 'mr-auto'
-                      } max-w-[80%]`}
-                    >
-                      <div
-                        className={`rounded-lg p-3 ${
+                      } max-w-[80%]`}>
+                        <div className={`rounded-lg p-3 ${
                           msg.sender_type === 'customer'
                             ? 'bg-black text-[#FFFFF0] ml-auto'
+                            : msg.sender_type === 'system'
+                            ? 'bg-gray-100 border border-gray-300'
                             : 'bg-white border border-black'
-                        }`}
-                      >
-                        <p>{msg.content}</p>
-                      </div>
-                      <div className={`text-xs mt-1 text-gray-500 ${
-                        msg.sender_type === 'customer' ? 'text-right' : 'text-left'
-                      }`}>
-                        {new Date(msg.created_at).toLocaleTimeString()}
+                        }`}>
+                          <p>{msg.content}</p>
+                          {msg.sender_type === 'agent' && 
+                           msg.content.includes("Would you like me to connect you with a CHANEL Client Care Advisor") && 
+                           conversationStatus === 'Active' && (
+                            <button
+                              onClick={handleHumanHandoff}
+                              disabled={isHandingOff}
+                              className="mt-2 text-sm px-3 py-1 bg-black text-[#FFFFF0] rounded hover:bg-neutral-800 transition-colors disabled:opacity-50"
+                            >
+                              {isHandingOff ? 'Connecting...' : 'Connect to Human Agent'}
+                            </button>
+                          )}
+                        </div>
+                        <div className={`text-xs mt-1 text-gray-500 ${
+                          msg.sender_type === 'customer' ? 'text-right' : 'text-left'
+                        }`}>
+                          {new Date(msg.created_at).toLocaleTimeString()}
+                        </div>
                       </div>
                     </div>
                   ))}
+                  {isAiTyping && (
+                    <div className="mr-auto max-w-[80%] mb-2">
+                      <TypingIndicator />
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
                 </div>
 
                 {/* Input Area */}

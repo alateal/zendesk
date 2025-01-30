@@ -381,7 +381,7 @@ const KnowledgeBase = () => {
         .from('collections')
         .select('id, title')
         .eq('organizations_id', selectedOrg)
-        .order('created_at', { ascending: false });
+        .order('title', { ascending: true }); // Add ordering
 
       if (error) {
         console.error('Error fetching collections:', error);
@@ -389,7 +389,13 @@ const KnowledgeBase = () => {
       }
 
       if (collections) {
-        setCollections(collections.map(c => ({ id: c.id, title: c.title })));
+        // Ensure unique collections
+        const uniqueCollections = new Map();
+        collections.forEach(collection => {
+          uniqueCollections.set(collection.id, collection);
+        });
+        
+        setCollections(Array.from(uniqueCollections.values()));
       }
     };
 
@@ -1445,53 +1451,53 @@ const KnowledgeBase = () => {
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="border-b border-[#8B4513]">
-                  <tr className="text-left text-xs text-[#8B6B4D]">
-                    <th className="text-left py-3 pr-6 font-medium w-[30%]">Title</th>
-                    <th className="text-left py-3 pr-6 font-medium w-[15%]">Type</th>
-                    <th className="text-left py-3 pr-3 font-medium w-[10%]">AI Agent</th>
-                    <th className="text-left py-3 pr-3 font-medium w-[10%]">Help Center</th>
-                    <th className="text-left py-3 pr-4 font-medium w-[10%]">Collections</th>
-                    <th className="text-left py-3 pr-4 font-medium w-[12%]">Status</th>
-                    <th className="text-left py-3 font-medium w-[13%]">Last updated</th>
+                    <tr className="text-left text-xs text-[#8B6B4D]">
+                      <th className="text-left py-3 pr-6 font-medium w-[30%]">Title</th>
+                      <th className="text-left py-3 pr-6 font-medium w-[15%]">Type</th>
+                      <th className="text-left py-3 pr-3 font-medium w-[10%]">AI Agent</th>
+                      <th className="text-left py-3 pr-3 font-medium w-[10%]">Help Center</th>
+                      <th className="text-left py-3 pr-4 font-medium w-[10%]">Collections</th>
+                      <th className="text-left py-3 pr-4 font-medium w-[12%]">Status</th>
+                      <th className="text-left py-3 font-medium w-[13%]">Last updated</th>
                     </tr>
                   </thead>
                   <tbody>
-                  {filteredArticles.map((article) => (
+                    {filteredArticles.map((article) => (
                       <tr 
                         key={article.id} 
                         className="hover:bg-[#F5E6D3] cursor-pointer border-b border-[#8B4513] last:border-b-0"
                         onClick={() => handleArticleClick(article)}
                       >
-                      <td className="py-4 pr-6">
-                        <div className="flex items-center gap-2">
-                          <IconArticle 
-                            size={18} 
-                            className="text-[#8B4513] shrink-0" 
-                            stroke={1.5}
-                          />
-                          <span className="text-[#3C1810]">{article.title}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 pr-6 text-[#3C1810] text-sm">
+                        <td className="py-4 pr-6">
+                          <div className="flex items-center gap-2">
+                            <IconArticle 
+                              size={18} 
+                              className="text-[#8B4513] shrink-0" 
+                              stroke={1.5}
+                            />
+                            <span className="text-[#3C1810]">{article.title}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 pr-6 text-[#3C1810] text-sm">
                           {article.is_public ? 'Public article' : 'Internal article'}
                         </td>
                         <td className="py-4 pr-4">
-                        {article.enabled_ai ? (
-                          <IconCheck size={18} className="text-[#8B4513]" />
-                        ) : (
-                          <IconX size={18} className="text-[#8B6B4D]" />
-                        )}
+                          {article.enabled_ai ? (
+                            <IconCheck size={18} className="text-[#8B4513]" />
+                          ) : (
+                            <IconX size={18} className="text-[#8B6B4D]" />
+                          )}
                         </td>
                         <td className="py-4 pr-4">
-                        {article.is_public ? (
-                          <IconCheck size={18} className="text-[#8B4513]" />
-                        ) : (
-                          <IconX size={18} className="text-[#8B6B4D]" />
-                        )}
+                          {article.is_public && article.is_published ? (
+                            <IconCheck size={18} className="text-[#8B4513]" />
+                          ) : (
+                            <IconX size={18} className="text-[#8B6B4D]" />
+                          )}
                         </td>
-                      <td className="py-4 pr-4 text-[#3C1810] text-sm">
-                        {article.collections?.title || 'Uncategorized'}
-                      </td>
+                        <td className="py-4 pr-4 text-[#3C1810] text-sm">
+                          {article.collections?.title || 'Uncategorized'}
+                        </td>
                         <td className="py-4 pr-4">
                           <span className={`px-2 py-1 rounded-full text-sm ${
                             article.is_published 

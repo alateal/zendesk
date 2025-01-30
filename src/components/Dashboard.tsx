@@ -1060,6 +1060,52 @@ const Dashboard = () => {
     )}
   </div>
 
+  // In the messages section of the conversation detail
+  const renderMessages = (messages: any[]) => {
+    return messages.map((msg, index) => (
+      <div
+        key={`${msg.id}-${index}`}
+        className={`mb-4 flex ${
+          msg.sender_type === 'customer' ? 'justify-end' : 'justify-start'
+        }`}
+      >
+        <div
+          className={`max-w-[70%] ${
+            msg.sender_type === 'customer' ? 'ml-auto' : 'mr-auto'
+          }`}
+        >
+          {/* Sender Label */}
+          <div className={`text-xs mb-1 text-[#5C2E0E] ${
+            msg.sender_type === 'customer' ? 'text-right' : 'text-left'
+          }`}>
+            {msg.sender_type === 'customer' ? 'Customer' :
+             msg.sender_type === 'agent' && msg.sender_id === 'ai-agent' ? 'Agent Dali' :
+             msg.sender_type === 'system' ? 'System' : 'Agent'}
+          </div>
+
+          {/* Message Content */}
+          <div className={`rounded-lg p-3 ${
+            msg.sender_type === 'customer'
+              ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
+              : 'bg-[#FFFFFF] text-[#3C1810] border border-[#8B4513]'
+          }`}>
+            <p>{msg.content}</p>
+          </div>
+
+          {/* Timestamp */}
+          <div className={`text-xs mt-1 text-[#5C2E0E] opacity-75 ${
+            msg.sender_type === 'customer' ? 'text-right' : 'text-left'
+          }`}>
+            {new Date(msg.created_at).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit'
+            })}
+          </div>
+        </div>
+      </div>
+    ));
+  };
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
@@ -1578,7 +1624,9 @@ const Dashboard = () => {
 
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto">
-          {conversations.map((conversation) => {
+          {conversations
+            .filter(conversation => conversation.status !== 'Closed')
+            .map((conversation) => {
             const customerMessages = conversation.messages?.filter(msg => msg.sender_type === 'customer') || [];
             const latestCustomerMessage = customerMessages.length > 0 
               ? customerMessages[customerMessages.length - 1] 
@@ -1693,53 +1741,7 @@ const Dashboard = () => {
               </div>
           ) : (
             <div className="space-y-4">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`max-w-2xl ${
-                      msg.sender_type === 'user' ? 'ml-auto' : 'mr-auto'
-                  }`}
-                >
-                  <div
-                    className={`rounded-lg p-4 ${
-                        msg.sender_type === 'user'
-                          ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
-                          : msg.sender_type === 'system'
-                          ? 'bg-[#F5E6D3] text-[#3C1810] border border-[#8B4513]'
-                          : 'bg-[#FFFFFF] text-[#3C1810] border border-[#8B4513]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-sm font-medium ${
-                          msg.sender_type === 'user' || msg.sender_type === 'system'
-                            ? 'text-[#5C2E0E]'
-                            : 'text-[#5C2E0E]'
-                        }`}>
-                          {msg.sender_type === 'user' 
-                            ? 'Agent' 
-                            : getCurrentConversation()?.customer_name || 'Unknown Customer'}
-                      </span>
-                        <span className={`text-xs ${
-                          msg.sender_type === 'user' || msg.sender_type === 'system'
-                            ? 'text-[#5C2E0E] opacity-75'
-                            : 'text-[#5C2E0E] opacity-75'
-                        }`}>
-                          {new Date(msg.created_at).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                      </span>
-                    </div>
-                      <p className={
-                        msg.sender_type === 'user' || msg.sender_type === 'system'
-                          ? 'text-[#3C1810]'
-                          : 'text-[#3C1810]'
-                      }>
-                        {msg.content}
-                      </p>
-                  </div>
-                </div>
-              ))}
+              {renderMessages(messages)}
             </div>
           )}
         </div>

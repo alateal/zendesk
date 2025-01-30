@@ -103,4 +103,72 @@ router.post('/generate-enhanced-article', authMiddleware as RequestHandler, asyn
   }
 });
 
+router.post('/search-similar', async (req, res) => {
+  try {
+    const { query, organizationId } = req.body;
+
+    if (!query || !organizationId) {
+      return res.status(400).json({
+        error: 'Missing required parameters: query and organizationId'
+      });
+    }
+
+    console.log('Searching for:', { query, organizationId });
+
+    const similarArticles = await langchainService.findSimilarArticles(
+      query,
+      organizationId
+    );
+
+    console.log('Found articles:', similarArticles);
+
+    return res.json({
+      articles: similarArticles
+    });
+
+  } catch (error) {
+    console.error('Detailed error in search-similar:', {
+      message: error.message,
+      stack: error.stack
+    });
+    return res.status(500).json({
+      error: error.message || 'Internal server error'
+    });
+  }
+});
+
+router.get('/test-similarity', async (req, res) => {
+  try {
+    const results = await langchainService.findSimilarArticles(
+      "How do I return an item?",
+      "645d0512-984f-4a3a-b625-5b429b24291e" // Your org ID
+    );
+    res.json(results);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+router.post('/generate-response', async (req, res) => {
+  try {
+    const { question, articleContent } = req.body;
+
+    if (!question || !articleContent) {
+      return res.status(400).json({
+        error: 'Question and article content are required'
+      });
+    }
+
+    const response = await langchainService.generateChatResponse(question, articleContent);
+    
+    return res.json({ response });
+
+  } catch (error) {
+    console.error('Error generating response:', error);
+    return res.status(500).json({
+      error: 'Failed to generate response'
+    });
+  }
+});
+
 export const aiRoutes = router;

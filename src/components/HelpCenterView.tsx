@@ -219,16 +219,23 @@ const HelpCenterView = () => {
             is_published
           )
         `)
-        .eq('organizations_id', userData.organizations_id);
+        .eq('organizations_id', userData.organizations_id)
+        .order('title', { ascending: true });
 
       if (collectionsData) {
-        // Filter to only include collections that have public AND published articles
-        const collectionsWithPublicArticles = collectionsData
+        // Create a Map to ensure unique collections by ID and maintain the latest version
+        const uniqueCollections = new Map();
+        collectionsData.forEach(collection => {
+          uniqueCollections.set(collection.id, collection);
+        });
+
+        // Convert Map back to array and filter for public articles
+        const collectionsWithPublicArticles = Array.from(uniqueCollections.values())
           .map(collection => ({
             id: collection.id,
             title: collection.title,
             organizations_id: collection.organizations_id,
-            articles: collection.articles
+            articles: (collection.articles || [])
               .filter(article => article.is_public && article.is_published)
               .map(article => ({
                 id: article.id,
@@ -345,9 +352,8 @@ const HelpCenterView = () => {
   };
 
   const handleArticleClick = (article: CollectionArticle) => {
-    // Fetch the full article data when needed
     const fetchFullArticle = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('articles')
         .select(`
           *,
@@ -357,7 +363,12 @@ const HelpCenterView = () => {
           )
         `)
         .eq('id', article.id)
-        .single();
+        .maybeSingle();
+      
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error fetching article:', error);
+        return;
+      }
       
       if (data) {
         setSelectedArticle(data);
@@ -1205,18 +1216,23 @@ const HelpCenterView = () => {
                           
                           {isCollectionDropdownOpen && (
                             <div className="absolute z-50 w-full mt-1 bg-[#FDF6E3] border border-[#8B4513] rounded shadow-lg max-h-48 overflow-y-auto">
-                              {collections.map((collection) => (
-                                <button
-                                  key={collection.id}
-                                  onClick={() => {
-                                    setSelectedArticle({ ...selectedArticle, collection_id: collection.id });
-                                    setIsCollectionDropdownOpen(false);
-                                  }}
-                                  className="w-full px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] text-left"
-                                >
-                                  {collection.title}
-                                </button>
-                              ))}
+                              {collections
+                                .filter((collection, index, self) => 
+                                  index === self.findIndex(c => c.id === collection.id)
+                                )
+                                .map(collection => (
+                                  <button
+                                    key={collection.id}
+                                    onClick={() => {
+                                      setSelectedArticle(prev => prev ? { ...prev, collection_id: collection.id } : prev);
+                                      setIsCollectionDropdownOpen(false);
+                                    }}
+                                    className="w-full px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] text-left"
+                                  >
+                                    {collection.title}
+                                  </button>
+                                ))
+                              }
                               <button
                                 onClick={() => {
                                   setIsNewCollectionModalOpen(true);
@@ -1455,18 +1471,23 @@ const HelpCenterView = () => {
                           
                           {isCollectionDropdownOpen && (
                             <div className="absolute z-50 w-full mt-1 bg-[#FDF6E3] border border-[#8B4513] rounded shadow-lg max-h-48 overflow-y-auto">
-                              {collections.map((collection) => (
-                                <button
-                                  key={collection.id}
-                                  onClick={() => {
-                                    setNewArticle({ ...newArticle, collection_id: collection.id });
-                                    setIsCollectionDropdownOpen(false);
-                                  }}
-                                  className="w-full px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] text-left"
-                                >
-                                  {collection.title}
-                                </button>
-                              ))}
+                              {collections
+                                .filter((collection, index, self) => 
+                                  index === self.findIndex(c => c.id === collection.id)
+                                )
+                                .map(collection => (
+                                  <button
+                                    key={collection.id}
+                                    onClick={() => {
+                                      setNewArticle({ ...newArticle, collection_id: collection.id });
+                                      setIsCollectionDropdownOpen(false);
+                                    }}
+                                    className="w-full px-3 py-2 text-sm text-[#3C1810] hover:bg-[#F5E6D3] text-left"
+                                  >
+                                    {collection.title}
+                                  </button>
+                                ))
+                              }
                               <button
                                 onClick={() => {
                                   setIsNewCollectionModalOpen(true);

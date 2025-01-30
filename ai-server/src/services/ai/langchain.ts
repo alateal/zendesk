@@ -371,6 +371,139 @@ export class LangchainService {
       throw error;
     }
   }
+
+  private async createEmbedding(text: string): Promise<number[]> {
+    try {
+      const response = await this.embeddings.embedQuery(text);
+      return response;
+    } catch (error) {
+      console.error('Error creating embedding:', error);
+      throw error;
+    }
+  }
+
+  async findSimilarArticles(query: string, organizationId: string): Promise<Array<{
+    id: string;
+    content: string;
+    title?: string;
+    similarity: number;
+  }>> {
+    try {
+      console.log('1. Starting similarity search for:', { query, organizationId });
+
+      // Generate embedding for the query
+      const queryEmbedding = await this.createEmbedding(query);
+      console.log('2. Generated query embedding length:', queryEmbedding.length);
+
+      // First, let's check if we have any embeddings in the database
+      const { data: checkEmbeddings, error: checkError } = await this.supabase
+        .from('ai_content_chunks')
+        .select('count')
+        .eq('organizations_id', organizationId);
+      
+      console.log('3. Existing embeddings check:', { checkEmbeddings, checkError });
+
+      // Perform the similarity search with a lower threshold
+      const { data: similarArticles, error } = await this.supabase.rpc(
+        'match_articles',
+        {
+          query_embedding: queryEmbedding,
+          match_threshold: 0.5, // Lowered from 0.7 to catch more matches
+          match_count: 3,      // Increased from 3 to get more potential matches
+          p_organization_id: organizationId
+        }
+      );
+
+      console.log('4. Similarity search results:', {
+        similarArticles,
+        error,
+        count: similarArticles?.length || 0
+      });
+
+      if (error) {
+        console.error('Error in similarity search:', error);
+        return [];
+      }
+
+      if (!similarArticles || similarArticles.length === 0) {
+        console.log('No similar articles found');
+        return [];
+      }
+
+      // Get the article IDs we found
+      const articleIds = similarArticles.map(match => match.id);
+      console.log('5. Looking up articles with IDs:', articleIds);
+
+      // Look up the full articles
+      const { data: articlesContent, error: articlesError } = await this.supabase
+        .from('articles')
+        .select('id, content, title, is_published, is_public')
+        .in('id', articleIds)
+        .eq('is_published', true)
+        .eq('is_public', true);
+
+      console.log('6. Articles content lookup:', {
+        articlesContent,
+        articlesError,
+        count: articlesContent?.length || 0
+      });
+
+      if (articlesError || !articlesContent) {
+        console.error('Error looking up articles:', articlesError);
+        return [];
+      }
+
+      // Map the results together
+      const results = similarArticles.map(match => {
+        const article = articlesContent.find(a => a.id === match.id);
+        return {
+          id: match.id,
+          content: article?.content || '',
+          title: article?.title,
+          similarity: match.similarity
+        };
+      });
+
+      console.log('7. Final results:', {
+        count: results.length,
+        similarities: results.map(r => r.similarity),
+        titles: results.map(r => r.title)
+      });
+
+      return results;
+
+    } catch (error) {
+      console.error('Error in findSimilarArticles:', error);
+      throw error;
+    }
+  }
+
+  async generateChatResponse(question: string, articleContent: string): Promise<string> {
+    try {
+      const response = await this.model.invoke(
+        `You are Agent Dali, a helpful but sophisticated CHANEL customer service AI. 
+         Using the provided article content, answer the customer's question in a concise, 
+         friendly, and professional manner. Keep your response brief (2-3 sentences max) 
+         while maintaining CHANEL's elegant tone.
+
+         Customer Question: ${question}
+         
+         Article Content: ${articleContent}
+         
+         Instructions:
+         - Be concise and friendly
+         - Use "we" when referring to CHANEL
+         - Focus on the most relevant information
+         - Maintain a sophisticated tone
+         - Keep response to 2-3 sentences maximum`
+      );
+
+      return response.content.toString();
+    } catch (error) {
+      console.error('Error generating chat response:', error);
+      throw error;
+    }
+  }
 }
 
 export const langchainService = new LangchainService(); 
