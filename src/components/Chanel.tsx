@@ -19,7 +19,7 @@ interface Message {
 }
 
 // Add new types at the top
-type ConversationStatus = 'New' | 'Active' | 'Pending_Handoff' | 'Handed_Off' | 'Closed';
+type ConversationStatus = 'New' | 'Active' | 'Pending_Handoff' | 'Handed_Off' | 'Closed' | 'AI_Chat';
 
 interface Conversation {
   id: string;
@@ -71,14 +71,14 @@ const Chanel = () => {
     scrollToBottom();
   }, [messages]);
 
-  // Add initial greeting when user info is set
+  // Update the useEffect for initial greeting
   useEffect(() => {
-    if (userInfo && messages.length === 0) {
+    if (userInfo && !messages.some(m => m.id === 'greeting')) {  // Check if greeting doesn't exist
       const initialGreeting = `Hello ${userInfo.fullName}! I'm Agent Dali, CHANEL's virtual assistant. How may I assist you today?`;
       
       setIsAiTyping(true);
       setTimeout(() => {
-        setMessages([{
+        setMessages(prevMessages => [...prevMessages, {  // Use functional update to preserve existing messages
           id: 'greeting',
           content: initialGreeting,
           created_at: new Date().toISOString(),
@@ -138,45 +138,62 @@ const Chanel = () => {
   };
 
   const handleHumanHandoff = async () => {
-    if (!conversationId) return;
+    if (!userInfo) return;
     
     try {
       setIsHandingOff(true);
-      
-      // Update conversation status
-      const { error: updateError } = await supabase
+
+      // Get customer info
+      const { data: customer, error: customerError } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('email', userInfo.email)
+        .single();
+
+      if (customerError) throw customerError;
+
+      // Create conversation for handoff
+      const { data: newConversation, error: conversationError } = await supabase
         .from('conversations')
-        .update({
+        .insert([{
+          customer_id: customer.id,
+          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+          channels: 'Website',
           status: 'Pending_Handoff'
-        })
-        .eq('id', conversationId);
+        }])
+        .select()
+        .single();
 
-      if (updateError) {
-        console.error('Handoff update error:', updateError);
-        throw new Error('Failed to update conversation status');
-      }
-
+      if (conversationError) throw conversationError;
+      
+      const newConversationId = newConversation.id;
+      setConversationId(newConversationId);
+      localStorage.setItem('chatConversationId', newConversationId);
       setConversationStatus('Pending_Handoff');
 
-      // Send system message about handoff
-      const { error: messageError } = await supabase
-        .from('messages')
-        .insert([{
-          content: "I'm connecting you with a CHANEL Client Care Advisor. Please wait a moment.",
-          conversations_id: conversationId,
-          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-          sender_id: 'system',
-          sender_type: 'system'
-        }]);
+      // Add all previous messages to the conversation
+      const messagesToAdd = messages.map(msg => ({
+        content: msg.content,
+        conversations_id: newConversationId,
+        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+        sender_id: msg.sender_type === 'customer' ? customer.id : 'ai-agent',
+        sender_type: msg.sender_type,
+        created_at: msg.created_at
+      }));
 
-      if (messageError) {
-        console.error('Handoff message error:', messageError);
-        throw new Error('Failed to send handoff message');
-      }
+      await supabase.from('messages').insert(messagesToAdd);
+
+      // Add handoff message
+      await supabase.from('messages').insert([{
+        content: "I'm connecting you with a CHANEL Client Care Advisor. Please wait a moment.",
+        conversations_id: newConversationId,
+        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+        sender_id: 'system',
+        sender_type: 'system'
+      }]);
 
     } catch (error) {
       console.error('Error in human handoff:', error);
-      // More specific error message
       if (error instanceof Error) {
         alert(error.message);
       } else {
@@ -202,6 +219,7 @@ const Chanel = () => {
 
       let currentConversationId = conversationId;
 
+      // Create AI conversation if it doesn't exist
       if (!currentConversationId) {
         const { data: newConversation, error: conversationError } = await supabase
           .from('conversations')
@@ -209,7 +227,7 @@ const Chanel = () => {
             customer_id: customer.id,
             organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
             channels: 'Website',
-            status: 'New'
+            status: 'AI_Chat'
           }])
           .select()
           .single();
@@ -220,16 +238,7 @@ const Chanel = () => {
         localStorage.setItem('chatConversationId', newConversation.id);
       }
 
-      // Update conversation status if it's new
-      if (conversationStatus === 'New') {
-        await supabase
-          .from('conversations')
-          .update({ status: 'Active' })
-          .eq('id', currentConversationId);
-        setConversationStatus('Active');
-      }
-
-      // Send user message first
+      // Store customer message - messages will be added via subscription
       await supabase.from('messages').insert([{
         content: message,
         conversations_id: currentConversationId,
@@ -238,20 +247,13 @@ const Chanel = () => {
         sender_type: 'customer'
       }]);
 
-      // Clear input immediately
-      setMessage('');
+      setMessage(''); // Clear input
+      setIsAiTyping(true);
 
-      // Delay typing indicator by 3 seconds
-      setTimeout(() => {
-        setIsAiTyping(true);
-      }, 3000);
-
-      // Get similar articles and generate response
+      // Get AI response
       const similarResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/search-similar`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: message,
           organizationId: '645d0512-984f-4a3a-b625-5b429b24291e'
@@ -262,14 +264,11 @@ const Chanel = () => {
       let aiResponse;
 
       if (similarData.articles && similarData.articles.length > 0) {
-        // Reset failed attempts on successful response
         setFailedAttempts(0);
-        // Generate response from matched article
+        
         const aiResponseData = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-response`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             question: message,
             articleContent: similarData.articles[0].content
@@ -278,44 +277,31 @@ const Chanel = () => {
 
         const { response } = await aiResponseData.json();
         aiResponse = response;
-
-        // Send AI response with matched content
-        setTimeout(async () => {
-          await supabase.from('messages').insert([{
-            content: aiResponse,
-            conversations_id: currentConversationId,
-            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-            sender_id: 'ai-agent',
-            sender_type: 'agent'
-          }]);
-          setIsAiTyping(false);
-        }, 1000);
       } else {
-        // Increment failed attempts
         const newFailedAttempts = failedAttempts + 1;
         setFailedAttempts(newFailedAttempts);
 
-        // Auto-initiate handoff after 3 failed attempts
         if (newFailedAttempts >= 3) {
           aiResponse = "I notice I haven't been able to fully address your questions. Let me connect you with a CHANEL Client Care Advisor who can better assist you.";
-          // Trigger handoff automatically
-          setTimeout(() => {
-            handleHumanHandoff();
-          }, 1000);
         } else {
           aiResponse = "I apologize, but I don't have specific information about that. Would you like me to connect you with a CHANEL Client Care Advisor who can better assist you?";
         }
+      }
 
-        // Send AI response without metadata
-        setTimeout(async () => {
-          await supabase.from('messages').insert([{
-            content: aiResponse,
-            conversations_id: currentConversationId,
-            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-            sender_id: 'ai-agent',
-            sender_type: 'agent'
-          }]);
-          setIsAiTyping(false);
+      // Store AI response - will be added via subscription
+      await supabase.from('messages').insert([{
+        content: aiResponse,
+        conversations_id: currentConversationId,
+        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+        sender_id: 'ai-agent',
+        sender_type: 'agent'
+      }]);
+
+      setIsAiTyping(false);
+
+      if (failedAttempts >= 2) {
+        setTimeout(() => {
+          handleHumanHandoff();
         }, 1000);
       }
 
@@ -360,10 +346,11 @@ const Chanel = () => {
     }
   };
 
+  // Update the message subscription effect
   useEffect(() => {
     if (!conversationId) return;
 
-    // Load existing messages
+    // Load existing messages first
     const loadMessages = async () => {
       const { data, error } = await supabase
         .from('messages')
@@ -376,12 +363,21 @@ const Chanel = () => {
         return;
       }
 
-      if (data) setMessages(data);
+      if (data) {
+        // Replace all messages instead of merging
+        setMessages(data.map(msg => ({
+          id: msg.id,
+          content: msg.content,
+          created_at: msg.created_at,
+          sender_type: msg.sender_type as MessageType,
+          is_typing: false
+        })));
+      }
     };
 
     loadMessages();
 
-    // Subscribe to new messages
+    // Create subscription to new messages
     const channel = supabase
       .channel(`messages-${conversationId}`)
       .on(
@@ -393,45 +389,28 @@ const Chanel = () => {
           filter: `conversations_id=eq.${conversationId}`
         },
         (payload) => {
-          setMessages(current => [...current, payload.new]);
-        }
-      )
-      .subscribe();
-
-    // Subscribe to conversation status changes
-    const conversationChannel = supabase
-      .channel(`conversation-${conversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'conversations',
-          filter: `id=eq.${conversationId}`
-        },
-        (payload) => {
-          if (payload.new.status) {
-            setConversationStatus(payload.new.status as ConversationStatus);
-            
-            // Handle status changes
-            if (payload.new.status === 'Handed_Off' && payload.new.agent_id) {
-              // Show human agent connected message
-              setMessages(current => [...current, {
-                id: 'system-handoff',
-                content: 'You are now connected with a CHANEL Client Care Advisor.',
-                created_at: new Date().toISOString(),
-                sender_type: 'system'
-              }]);
-            }
+          // Only add new messages that aren't from the current user's session
+          if (!payload.new.id.toString().startsWith('local-')) {
+            setMessages(prevMessages => {
+              // Only add if not already in the list
+              const exists = prevMessages.some(m => m.id === payload.new.id);
+              if (exists) return prevMessages;
+              
+              return [...prevMessages, {
+                id: payload.new.id,
+                content: payload.new.content,
+                created_at: payload.new.created_at,
+                sender_type: payload.new.sender_type as MessageType,
+                is_typing: false
+              }];
+            });
           }
         }
       )
       .subscribe();
 
-    // Cleanup subscription
     return () => {
-      channel.unsubscribe();
-      conversationChannel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, [conversationId]);
 

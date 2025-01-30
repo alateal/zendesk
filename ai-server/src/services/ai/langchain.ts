@@ -35,8 +35,8 @@ export class LangchainService {
 
     // Initialize LangSmith client
     this.client = new Client({
-      apiKey: config.langsmithApiKey,
-      projectName: config.langsmithProjectName
+      apiUrl: process.env.LANGCHAIN_ENDPOINT,
+      apiKey: process.env.LANGSMITH_API_KEY,
     });
 
     // Initialize tracer and callback manager
@@ -267,21 +267,19 @@ export class LangchainService {
     organizationId: string;
     collectionId?: string;
   }): Promise<string> {
-    // Create parent run tree with proper configuration
-    const parentRunConfig = {
-      name: "Generate Enhanced Article",
-      run_type: "chain",
-      inputs: {
-        title: params.title,
-        description: params.description,
-        organizationId: params.organizationId
-      }
-    };
-
-    const parentRun = new RunTree(parentRunConfig);
-    await parentRun.postRun();
-
+    let parentRun;
     try {
+      // Create parent run for article generation
+      parentRun = await this.client.createRun({
+        name: "Article Generation",
+        run_type: "chain",
+        project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
+        inputs: { 
+          title: params.title,
+          description: params.description
+        }
+      });
+
       const { title, description, organizationId } = params;
 
       // Get organization name for brand voice
@@ -294,24 +292,29 @@ export class LangchainService {
       const brandName = orgData?.name || 'Our';
 
       // Create child run for competitor research
-      const competitorResearchRun = await parentRun.createChild({
+      const competitorResearchRun = await this.client.createRun({
         name: "Competitor Research",
         run_type: "chain",
+        project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
+        parent_run_id: parentRun?.id,
         inputs: { title, organizationId }
       });
-      await competitorResearchRun.postRun();
 
       const competitorInsights = await this.learnFromHelpCenters(title, organizationId);
 
-      await competitorResearchRun.end({
-        outputs: { competitorInsights }
-      });
-      await competitorResearchRun.patchRun();
+      if (competitorResearchRun) {
+        await competitorResearchRun.end({
+          outputs: { competitorInsights }
+        });
+        await competitorResearchRun.patchRun();
+      }
 
       // Create child run for article generation
-      const articleGenRun = await parentRun.createChild({
-        name: "Article Generation",
+      const articleGenRun = await this.client.createRun({
+        name: "Generate Article Content",
         run_type: "llm",
+        project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
+        parent_run_id: parentRun?.id,
         inputs: {
           title,
           description,
@@ -319,7 +322,6 @@ export class LangchainService {
           brandName
         }
       });
-      await articleGenRun.postRun();
 
       const response = await this.model.invoke(
         `You are writing a help center article as ${brandName}'s official customer service representative.
@@ -350,24 +352,31 @@ export class LangchainService {
 
       const content = response.content.toString().replace(/['"]/g, '');
 
-      await articleGenRun.end({
-        outputs: { content }
-      });
-      await articleGenRun.patchRun();
+      if (articleGenRun) {
+        await articleGenRun.end({
+          outputs: { content }
+        });
+        await articleGenRun.patchRun();
+      }
 
-      // End parent run
-      await parentRun.end({
-        outputs: { content }
-      });
-      await parentRun.patchRun(false); // false to not exclude child runs
+      if (parentRun) {
+        await parentRun.end({
+          outputs: { content }
+        });
+        await parentRun.patchRun(false);
+      }
 
       return content;
+
     } catch (error) {
-      // Log errors and end the run tree
-      await parentRun.end({
-        error: error instanceof Error ? error.message : "Unknown error"
-      });
-      await parentRun.patchRun(false);
+      console.error('Error in article generation:', error);
+      // End the parent run with error if it exists
+      if (parentRun) {
+        await parentRun.end({
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+        await parentRun.patchRun(false);
+      }
       throw error;
     }
   }
@@ -388,12 +397,48 @@ export class LangchainService {
     title?: string;
     similarity: number;
   }>> {
+    let parentRun;
     try {
-      console.log('1. Starting similarity search for:', { query, organizationId });
+      // Create parent run for deflection
+      parentRun = await this.client.createRun({
+        name: "AI Deflection",
+        run_type: "chain",
+        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
+        inputs: { 
+          query,
+          organizationId
+        }
+      });
 
-      // Generate embedding for the query
+      // Create child run for embedding generation
+      const embeddingRun = await this.client.createRun({
+        name: "Generate Query Embedding",
+        run_type: "embedding",
+        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
+        parent_run_id: parentRun?.id,
+        inputs: { query }
+      });
+
       const queryEmbedding = await this.createEmbedding(query);
-      console.log('2. Generated query embedding length:', queryEmbedding.length);
+
+      if (embeddingRun) {
+        await embeddingRun.end({
+          outputs: { embedding_length: queryEmbedding.length }
+        });
+        await embeddingRun.patchRun();
+      }
+
+      // Create child run for similarity search
+      const searchRun = await this.client.createRun({
+        name: "Similarity Search",
+        run_type: "chain",
+        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
+        parent_run_id: parentRun?.id,
+        inputs: { 
+          queryEmbedding,
+          organizationId
+        }
+      });
 
       // First, let's check if we have any embeddings in the database
       const { data: checkEmbeddings, error: checkError } = await this.supabase
@@ -470,16 +515,54 @@ export class LangchainService {
         titles: results.map(r => r.title)
       });
 
+      if (searchRun) {
+        await searchRun.end({
+          outputs: { 
+            results_count: results.length,
+            similarities: results.map(r => r.similarity)
+          }
+        });
+        await searchRun.patchRun();
+      }
+
+      if (parentRun) {
+        await parentRun.end({
+          outputs: { 
+            results_count: results.length,
+            found_matches: results.length > 0
+          }
+        });
+        await parentRun.patchRun(false);
+      }
+
       return results;
 
     } catch (error) {
       console.error('Error in findSimilarArticles:', error);
+      // End the parent run with error if it exists
+      if (parentRun) {
+        await parentRun.end({
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+        await parentRun.patchRun(false);
+      }
       throw error;
     }
   }
 
   async generateChatResponse(question: string, articleContent: string): Promise<string> {
     try {
+      // Create run for chat response generation
+      const run = await this.client.createRun({
+        name: "Generate Chat Response",
+        run_type: "llm",
+        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
+        inputs: {
+          question,
+          articleContent
+        }
+      });
+
       const response = await this.model.invoke(
         `You are Agent Dali, a helpful but sophisticated CHANEL customer service AI. 
          Using the provided article content, answer the customer's question in a concise, 
@@ -497,6 +580,11 @@ export class LangchainService {
          - Maintain a sophisticated tone
          - Keep response to 2-3 sentences maximum`
       );
+
+      await run.end({
+        outputs: { response: response.content.toString() }
+      });
+      await run.patchRun();
 
       return response.content.toString();
     } catch (error) {
