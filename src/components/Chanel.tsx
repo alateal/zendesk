@@ -238,7 +238,7 @@ const Chanel = () => {
         localStorage.setItem('chatConversationId', newConversation.id);
       }
 
-      // Store customer message - messages will be added via subscription
+      // Store customer message
       await supabase.from('messages').insert([{
         content: message,
         conversations_id: currentConversationId,
@@ -250,54 +250,77 @@ const Chanel = () => {
       setMessage(''); // Clear input
       setIsAiTyping(true);
 
-      // Get AI response
-      const similarResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/search-similar`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: message,
-          organizationId: '645d0512-984f-4a3a-b625-5b429b24291e'
-        }),
-      });
-
-      const similarData = await similarResponse.json();
-      let aiResponse;
-
-      if (similarData.articles && similarData.articles.length > 0) {
-        setFailedAttempts(0);
-        
-        const aiResponseData = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-response`, {
+      try {
+        // Get AI response
+        const similarResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/search-similar`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            question: message,
-            articleContent: similarData.articles[0].content
+            query: message,
+            organizationId: '645d0512-984f-4a3a-b625-5b429b24291e'
           }),
         });
 
-        const { response } = await aiResponseData.json();
-        aiResponse = response;
-      } else {
-        const newFailedAttempts = failedAttempts + 1;
-        setFailedAttempts(newFailedAttempts);
-
-        if (newFailedAttempts >= 3) {
-          aiResponse = "I notice I haven't been able to fully address your questions. Let me connect you with a CHANEL Client Care Advisor who can better assist you.";
-        } else {
-          aiResponse = "I apologize, but I don't have specific information about that. Would you like me to connect you with a CHANEL Client Care Advisor who can better assist you?";
+        if (!similarResponse.ok) {
+          throw new Error(`Similar search failed: ${similarResponse.statusText}`);
         }
+
+        const similarData = await similarResponse.json();
+        let aiResponse;
+
+        if (similarData.articles && similarData.articles.length > 0) {
+          setFailedAttempts(0);
+          
+          const aiResponseData = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-response`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question: message,
+              articleContent: similarData.articles[0].content
+            }),
+          });
+
+          if (!aiResponseData.ok) {
+            throw new Error(`AI response generation failed: ${aiResponseData.statusText}`);
+          }
+
+          const responseJson = await aiResponseData.json();
+          aiResponse = responseJson.response;
+        } else {
+          const newFailedAttempts = failedAttempts + 1;
+          setFailedAttempts(newFailedAttempts);
+
+          if (newFailedAttempts >= 3) {
+            aiResponse = "I notice I haven't been able to fully address your questions. Let me connect you with a CHANEL Client Care Advisor who can better assist you.";
+          } else {
+            aiResponse = "I apologize, but I don't have specific information about that. Would you like me to connect you with a CHANEL Client Care Advisor who can better assist you?";
+          }
+        }
+
+        // Store AI response
+        if (aiResponse) {
+          await supabase.from('messages').insert([{
+            content: aiResponse,
+            conversations_id: currentConversationId,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            sender_id: 'ai-agent',
+            sender_type: 'agent'
+          }]);
+        }
+
+      } catch (aiError) {
+        console.error('AI Service Error:', aiError);
+        // Send a fallback message if AI service fails
+        await supabase.from('messages').insert([{
+          content: "I apologize, but I'm having trouble processing your request at the moment. Would you like to connect with a human agent who can assist you?",
+          conversations_id: currentConversationId,
+          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+          sender_id: 'ai-agent',
+          sender_type: 'agent'
+        }]);
+      } finally {
+        setIsAiTyping(false);
       }
-
-      // Store AI response - will be added via subscription
-      await supabase.from('messages').insert([{
-        content: aiResponse,
-        conversations_id: currentConversationId,
-        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-        sender_id: 'ai-agent',
-        sender_type: 'agent'
-      }]);
-
-      setIsAiTyping(false);
 
       if (failedAttempts >= 2) {
         setTimeout(() => {
@@ -368,14 +391,25 @@ const Chanel = () => {
       }
 
       if (data) {
-        // Replace all messages instead of merging
-        setMessages(data.map(msg => ({
-          id: msg.id,
-          content: msg.content,
-          created_at: msg.created_at,
-          sender_type: msg.sender_type as MessageType,
-          is_typing: false
-        })));
+        setMessages(prevMessages => {
+          const greetingMessage = prevMessages.find(m => m.id === 'greeting');
+          const newMessages = data.map(msg => ({
+            id: msg.id,
+            content: msg.content,
+            created_at: msg.created_at,
+            sender_type: msg.sender_type as MessageType,
+            is_typing: false
+          }));
+          
+          // Filter out any duplicates by id
+          const uniqueMessages = newMessages.filter(
+            msg => !prevMessages.some(prevMsg => prevMsg.id === msg.id)
+          );
+          
+          return greetingMessage 
+            ? [greetingMessage, ...uniqueMessages]
+            : uniqueMessages;
+        });
       }
     };
 
@@ -396,17 +430,25 @@ const Chanel = () => {
           // Only add new messages that aren't from the current user's session
           if (!payload.new.id.toString().startsWith('local-')) {
             setMessages(prevMessages => {
-              // Only add if not already in the list
+              // Check if message already exists
               const exists = prevMessages.some(m => m.id === payload.new.id);
               if (exists) return prevMessages;
               
-              return [...prevMessages, {
+              const newMessage = {
                 id: payload.new.id,
                 content: payload.new.content,
                 created_at: payload.new.created_at,
                 sender_type: payload.new.sender_type as MessageType,
                 is_typing: false
-              }];
+              };
+
+              // Ensure greeting stays at top if it exists
+              const greetingMessage = prevMessages.find(m => m.id === 'greeting');
+              const otherMessages = prevMessages.filter(m => m.id !== 'greeting');
+              
+              return greetingMessage 
+                ? [greetingMessage, ...otherMessages, newMessage]
+                : [...otherMessages, newMessage];
             });
           }
         }

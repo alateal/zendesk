@@ -690,16 +690,22 @@ export class LangchainService {
 
   async generateChatResponse(question: string, articleContent: string): Promise<string> {
     try {
-      // Create run for chat response generation
-      const run = await this.client.createRun({
-        name: "Generate Chat Response",
-        run_type: "llm",
-        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
-        inputs: {
-          question,
-          articleContent
-        }
-      });
+      let run;
+      try {
+        // Create run for chat response generation
+        run = await this.client.createRun({
+          name: "Generate Chat Response",
+          run_type: "llm",
+          project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
+          inputs: {
+            question,
+            articleContent
+          }
+        });
+      } catch (runError) {
+        console.warn('Failed to create LangSmith run:', runError);
+        // Continue without run tracking if it fails
+      }
 
       const response = await this.model.invoke(
         `You are Agent Dali, a helpful but sophisticated CHANEL customer service AI. 
@@ -720,10 +726,18 @@ export class LangchainService {
          - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent`
       );
 
-      await run.end({
-        outputs: { response: response.content.toString() }
-      });
-      await run.patchRun();
+      // Only try to end the run if it was successfully created
+      if (run) {
+        try {
+          await run.end({
+            outputs: { response: response.content.toString() }
+          });
+          await run.patchRun();
+        } catch (runEndError) {
+          console.warn('Failed to end LangSmith run:', runEndError);
+          // Continue even if run tracking fails
+        }
+      }
 
       return response.content.toString();
     } catch (error) {
