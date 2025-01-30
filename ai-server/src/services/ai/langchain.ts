@@ -92,21 +92,48 @@ export class LangchainService {
     try {
       console.log(`📄 Processing URL: ${url}`);
       
-      // Increase timeout to 30 seconds
+      // More specific selectors for help content
       const docs = await this.withTimeout(
         new CheerioWebBaseLoader(url, {
-          selector: 'body, article, .article, .content, main, .container, .page-content, #content, .main-content, .faq, .help-content',
+          selector: `
+            .help-article,
+            .faq-content,
+            .article-content,
+            .support-content,
+            #help-content,
+            [data-testid*="help"],
+            [data-testid*="faq"],
+            [data-testid*="support"],
+            .knowledge-base-article,
+            div[class*="article"] div[class*="content"],
+            div[class*="help"] div[class*="content"],
+            div[class*="faq"] div[class*="content"]
+          `.trim(),
+          // Remove script tags and other non-content elements
+          scriptSelectors: [
+            'script',
+            'style',
+            'header',
+            'footer',
+            'nav',
+            '.cookie-banner',
+            '#cookie-banner',
+            '.navigation',
+            '.menu',
+            '.sidebar'
+          ]
         }).load(),
-        30000, // 30 second timeout
+        30000,
         `Loading content from ${url}`
       );
 
-      if (docs.length === 0) {
-        console.log(`⚠️ No content extracted from: ${url}`);
+      // Validate content quality
+      if (docs.length === 0 || !this.isValidHelpContent(docs[0].pageContent)) {
+        console.log(`⚠️ No valid help content found in: ${url}`);
         return [];
       }
 
-      console.log(`✅ Successfully loaded content from: ${url}`);
+      console.log(`✅ Successfully loaded help content from: ${url}`);
 
       // Add source metadata
       docs.forEach(doc => {
@@ -129,6 +156,18 @@ export class LangchainService {
       }
       return [];
     }
+  }
+
+  private isValidHelpContent(content: string): boolean {
+    // Minimum content length
+    if (content.length < 100) return false;
+
+    // Check for script-like content
+    if (content.includes('function(') || content.includes('=>')) return false;
+
+    // Check for common help content indicators
+    const helpTerms = ['how to', 'guide', 'steps', 'instructions', 'help', 'support'];
+    return helpTerms.some(term => content.toLowerCase().includes(term));
   }
 
   private async searchHelpCenterArticles(topic: string, organizationId: string): Promise<string[]> {
@@ -208,13 +247,24 @@ export class LangchainService {
 
       console.log('🎯 Identified competitors:', competitors);
 
-      // Search specifically for competitor help center content
+      // Improved search for competitor help center content
       const competitorSearchPromises = competitors.map(competitor => 
         this.tavilyClient.search(
-          `${competitor} ${topic} help center OR faq OR customer service OR support guide`, {
-            searchDepth: "basic",
-            maxResults: 2, // Reduced from 3 to 2 to ensure total results stay under 5
-            filterWebResults: true
+          `${competitor} ${topic} official site customer service guide`, {
+            searchDepth: "advanced",
+            maxResults: 2,
+            filterWebResults: true,
+            // Focus on high-quality help content
+            searchType: "news",
+            excludeDomains: [
+              'cloudflare.com',
+              'facebook.com',
+              'twitter.com',
+              'linkedin.com'
+            ],
+            // Ensure we get recent content
+            endDate: new Date().toISOString(),
+            startDate: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString() // Last year
           }
         )
       );
@@ -222,9 +272,9 @@ export class LangchainService {
       const competitorResults = await Promise.all(competitorSearchPromises);
       const allResults = competitorResults
         .flatMap(result => result.results)
-        .slice(0, 5); // Limit total results to 5
+        .slice(0, 5); // Still limit total results to 5
 
-      console.log('🔍 Competitor help center results:', 
+      console.log('🔍 Initial search results:', 
         allResults.map(r => ({
           url: r.url,
           competitor: competitors.find(c => r.url.toLowerCase().includes(c)) || 'unknown',
@@ -232,23 +282,34 @@ export class LangchainService {
         }))
       );
 
-      // Modify URL filtering to be less strict
+      // Enhanced URL filtering
       const validUrls = allResults
         .filter(result => {
           const url = result.url.toLowerCase();
-          // Include more general help content URLs
+          
+          // Exclude common error/non-content pages
+          if (url.includes('/error') || 
+              url.includes('/login') || 
+              url.includes('/404') ||
+              url.includes('cloudflare') ||
+              url.includes('/cart')) {
+            return false;
+          }
+
+          // Include only help content URLs
           return (
-            url.includes('help') || 
-            url.includes('support') || 
-            url.includes('faq') || 
-            url.includes('customer-service') ||
+            (url.includes('/help') || 
+             url.includes('/support') || 
+             url.includes('/faq') || 
+             url.includes('/customer-service') ||
+             url.includes('/care')) &&
             competitors.some(competitor => url.includes(competitor))
           );
         })
         .map(result => result.url)
         .slice(0, 3);
 
-      console.log('🔍 Valid URLs to process:', validUrls);
+      console.log('🔍 Filtered URLs to process:', validUrls);
 
       // Process the URLs
       const processedDocs = await this.processHelpCenterUrls(validUrls);
@@ -312,6 +373,7 @@ export class LangchainService {
          
          Articles: ${limitedContent}`
       );
+      console.log('Analysis:', analysis.content);
 
       return analysis.content;
     } catch (error) {
@@ -334,7 +396,7 @@ export class LangchainService {
         ];
         return helpCenterDomains.some(domain => url.includes(domain));
       })
-      .slice(0, 5);
+      .slice(0, 3);
   }
 
   async generateEnhancedArticle(params: {

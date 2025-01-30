@@ -42,6 +42,15 @@ type Article = {
   };
 };
 
+// Add these types at the top with other types
+type GenerationPhase = 'idle' | 'research' | 'analysis' | 'writing' | 'error';
+
+type LoadingMessage = {
+  research: string;
+  analysis: string;
+  writing: string;
+};
+
 const getCurrentUser = async () => {
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -138,6 +147,50 @@ const KnowledgeBase = () => {
     isOpen: false,
     message: ''
   });
+  // Add new state variables
+  const [generationPhase, setGenerationPhase] = useState<GenerationPhase>('idle');
+  
+  const loadingMessages: LoadingMessage = {
+    research: 'One moment please. AI Dali is collecting information...',
+    analysis: 'Almost there, AI Dali is analyzing the information...',
+    writing: 'Generating your article...'
+  };
+
+  // Add LoadingOverlay component
+  const LoadingOverlay = () => (
+    <>
+      {generationPhase !== 'idle' && (
+        <div className="absolute inset-0 bg-[#FDF6E3] bg-opacity-90 flex flex-col items-center justify-center z-10">
+          <div className="flex flex-col items-center space-y-4">
+            {/* Loading Animation */}
+            <div className="w-16 h-16 relative">
+              <div className="absolute inset-0 border-4 border-[#8B4513] border-opacity-20 rounded-full"></div>
+              <div className="absolute inset-0 border-4 border-[#8B4513] border-l-transparent rounded-full animate-spin"></div>
+            </div>
+            
+            {/* Loading Message */}
+            <p className="text-[#3C1810] text-lg font-medium text-center px-4">
+              {loadingMessages[generationPhase as keyof LoadingMessage]}
+            </p>
+            
+            {/* Progress Indicator */}
+            <div className="flex items-center space-x-2">
+              {(['research', 'analysis', 'writing'] as const).map((phase, index) => (
+                <div 
+                  key={phase}
+                  className={`w-2 h-2 rounded-full ${
+                    index <= ['research', 'analysis', 'writing'].indexOf(generationPhase)
+                      ? 'bg-[#8B4513]' 
+                      : 'bg-[#D4B69C]'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   // Add authentication check
   useEffect(() => {
@@ -680,7 +733,18 @@ const KnowledgeBase = () => {
     }
     
     setIsGeneratingArticle(true);
+    setGenerationPhase('research');
+    
     try {
+      // Simulate research phase
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      setGenerationPhase('analysis');
+      
+      // Simulate analysis phase
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      setGenerationPhase('writing');
+      
+      // Make the actual API call
       const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
         method: 'POST',
@@ -712,8 +776,10 @@ const KnowledgeBase = () => {
         isOpen: true,
         message: 'Failed to generate article content'
       });
+      setGenerationPhase('error');
     } finally {
       setIsGeneratingArticle(false);
+      setGenerationPhase('idle');
     }
   };
 
@@ -1776,12 +1842,17 @@ const KnowledgeBase = () => {
                   </div>
                 </div>
                 <div className="relative group">
+                  {/* Tooltip */}
                   <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
                     <div className="flex items-center bg-[#FDF6E3] border border-[#8B4513] rounded px-2 py-1 shadow-lg">
                       <img src="/favicon.ico" alt="Tooltip" className="w-4 h-4 mr-2" />
                       <span className="text-sm text-[#3C1810]">Ask Agent Dali to write this article for you</span>
                     </div>
                   </div>
+                  
+                  {/* Add LoadingOverlay here */}
+                  <LoadingOverlay />
+                  
                   <textarea
                     value={articleData.content}
                     onChange={(e) => setArticleData({ ...articleData, content: e.target.value })}

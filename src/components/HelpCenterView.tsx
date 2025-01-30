@@ -67,42 +67,16 @@ type SelectedArticle = {
   };
 };
 
-const generateArticle = async (params: {
-  title: string;
-  description: string;
-  organizationId: string;
-  collectionId?: string;
-}) => {
-  try {
-    // Get the current session
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) {
-      throw new Error('No authentication session');
-    }
+// Keep these types at the top level
+type GenerationPhase = 'idle' | 'research' | 'analysis' | 'writing' | 'error';
 
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
-      },
-      body: JSON.stringify(params),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to generate article');
-    }
-
-    const { content } = await response.json();
-    return content || '';
-  } catch (error) {
-    console.error('Error generating article:', error);
-    alert(error instanceof Error ? error.message : 'Failed to generate article');
-    throw error;
-  }
+type LoadingMessage = {
+  research: string;
+  analysis: string;
+  writing: string;
 };
 
+// Add this after the LoadingMessage type and before the HelpCenterView component
 const isDefaultTitle = (title: string) => {
   return !title || title === 'Untitled public article';
 };
@@ -147,6 +121,16 @@ const HelpCenterView = () => {
   const [existingCollectionMessage, setExistingCollectionMessage] = useState('');
   const [articles, setArticles] = useState<Article[]>([]);
   const [isGeneratingArticle, setIsGeneratingArticle] = useState(false);
+
+  // Add new state for generation phases
+  const [generationPhase, setGenerationPhase] = useState<GenerationPhase>('idle');
+  
+  // Add loading messages
+  const loadingMessages: LoadingMessage = {
+    research: 'One moment please. AI Dali is collecting information...',
+    analysis: 'Almost there, AI Dali is analyzing the information...',
+    writing: 'Generating your article...'
+  };
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '';
@@ -649,6 +633,143 @@ const HelpCenterView = () => {
     };
   }, []);
 
+  // Move generateArticle inside component to access state
+  const generateArticle = async (params: {
+    title: string;
+    description: string;
+    organizationId: string;
+    collectionId?: string;
+  }) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('No authentication session');
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify(params),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate article');
+      }
+
+      const { content } = await response.json();
+      return content || '';
+
+    } catch (error) {
+      console.error('Error generating article:', error);
+      alert(error instanceof Error ? error.message : 'Failed to generate article');
+      throw error;
+    }
+  };
+
+  const handleGenerateArticle = async (params: {
+    title: string;
+    description: string;
+    organizationId: string;
+    collectionId?: string;
+  }) => {
+    setIsGeneratingArticle(true);
+    setGenerationPhase('research');
+    
+    try {
+      // Simulate research phase
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      setGenerationPhase('analysis');
+      
+      // Simulate analysis phase
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      setGenerationPhase('writing');
+      
+      // Call the actual generate article function
+      const content = await generateArticle(params);
+      
+      // Reset states
+      setGenerationPhase('idle');
+      setIsGeneratingArticle(false);
+      
+      return content;
+    } catch (error) {
+      setGenerationPhase('error');
+      setIsGeneratingArticle(false);
+      throw error;
+    }
+  };
+
+  // Add the loading overlay UI right before the textarea in both modals
+  const LoadingOverlay = () => (
+    <>
+      {generationPhase !== 'idle' && (
+        <div className="absolute inset-0 bg-[#FDF6E3] bg-opacity-90 flex flex-col items-center justify-center z-10">
+          <div className="flex flex-col items-center space-y-4">
+            {/* Loading Animation */}
+            <div className="w-16 h-16 relative">
+              <div className="absolute inset-0 border-4 border-[#8B4513] border-opacity-20 rounded-full"></div>
+              <div className="absolute inset-0 border-4 border-[#8B4513] border-l-transparent rounded-full animate-spin"></div>
+            </div>
+            
+            {/* Loading Message */}
+            <p className="text-[#3C1810] text-lg font-medium text-center px-4">
+              {loadingMessages[generationPhase as keyof LoadingMessage]}
+            </p>
+            
+            {/* Progress Indicator */}
+            <div className="flex items-center space-x-2">
+              {(['research', 'analysis', 'writing'] as const).map((phase, index) => (
+                <div 
+                  key={phase}
+                  className={`w-2 h-2 rounded-full ${
+                    index <= ['research', 'analysis', 'writing'].indexOf(generationPhase)
+                      ? 'bg-[#8B4513]' 
+                      : 'bg-[#D4B69C]'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // Update the onClick handler for the AI generation button
+  const handleAIGeneration = async () => {
+    if (!selectedOrg?.id || !selectedArticle?.title) return;
+    
+    if (!selectedArticle.collection_id) {
+      alert('Please select a collection first');
+      return;
+    }
+    
+    if (isDefaultTitle(selectedArticle.title)) {
+      alert('Please enter a title for the article');
+      return;
+    }
+    
+    try {
+      const article = await handleGenerateArticle({
+        title: selectedArticle.title,
+        description: selectedArticle.description || '',
+        organizationId: selectedOrg.id,
+        collectionId: selectedArticle.collection_id
+      });
+      
+      setSelectedArticle({
+        ...selectedArticle,
+        content: article
+      });
+    } catch (error) {
+      // Error is already handled in handleGenerateArticle
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#FDF6E3]">
       {/* Main Sidebar */}
@@ -1041,38 +1162,7 @@ const HelpCenterView = () => {
                 <div className="flex items-center justify-end mb-4">
                   <div className="relative">
                     <button
-                      onClick={async () => {
-                        if (!selectedOrg?.id || !selectedArticle.title) return;
-                        
-                        if (!selectedArticle.collection_id) {
-                          alert('Please select a collection first');
-                          return;
-                        }
-                        
-                        if (isDefaultTitle(selectedArticle.title)) {
-                          alert('Please enter a title for the article');
-                          return;
-                        }
-                        
-                        setIsGeneratingArticle(true);
-                        try {
-                          const article = await generateArticle({
-                            title: selectedArticle.title,
-                            description: selectedArticle.description || '',
-                            organizationId: selectedOrg.id,
-                            collectionId: selectedArticle.collection_id
-                          });
-                          
-                          setSelectedArticle({
-                            ...selectedArticle,
-                            content: article
-                          });
-                        } catch (error) {
-                          // Error is already handled in generateArticle
-                        } finally {
-                          setIsGeneratingArticle(false);
-                        }
-                      }}
+                      onClick={handleAIGeneration}
                       disabled={isDefaultTitle(selectedArticle.title) || isGeneratingArticle}
                       className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
                         isDefaultTitle(selectedArticle.title)
@@ -1099,12 +1189,7 @@ const HelpCenterView = () => {
                   </div>
                 </div>
                 <div className="relative group">
-                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
-                    <div className="flex items-center bg-[#FDF6E3] border border-[#8B4513] rounded px-2 py-1 shadow-lg">
-                      <img src="/favicon.ico" alt="Tooltip" className="w-4 h-4 mr-2" />
-                      <span className="text-sm text-[#3C1810]">Ask Agent Dali to write this article for you</span>
-                    </div>
-                  </div>
+                  <LoadingOverlay />
                   <textarea
                     value={selectedArticle.content}
                     onChange={(e) => setSelectedArticle({ ...selectedArticle, content: e.target.value })}
@@ -1339,7 +1424,7 @@ const HelpCenterView = () => {
                         
                         setIsGeneratingArticle(true);
                         try {
-                          const article = await generateArticle({
+                          const article = await handleGenerateArticle({
                             title: newArticle.title,
                             description: newArticle.description || '',
                             organizationId: selectedOrg.id,
@@ -1351,7 +1436,7 @@ const HelpCenterView = () => {
                             content: article
                           }));
                         } catch (error) {
-                          // Error is already handled in generateArticle
+                          // Error is already handled in handleGenerateArticle
                         } finally {
                           setIsGeneratingArticle(false);
                         }
@@ -1382,12 +1467,7 @@ const HelpCenterView = () => {
                   </div>
                 </div>
                 <div className="relative group">
-                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
-                    <div className="flex items-center bg-[#FDF6E3] border border-[#8B4513] rounded px-2 py-1 shadow-lg">
-                      <img src="/favicon.ico" alt="Tooltip" className="w-4 h-4 mr-2" />
-                      <span className="text-sm text-[#3C1810]">Click to edit</span>
-                    </div>
-                  </div>
+                  <LoadingOverlay />
                   <textarea
                     value={newArticle.content}
                     onChange={(e) => setNewArticle({ ...newArticle, content: e.target.value })}
