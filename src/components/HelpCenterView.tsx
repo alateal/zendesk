@@ -73,19 +73,34 @@ const generateArticle = async (params: {
   organizationId: string;
   collectionId?: string;
 }) => {
-  const response = await fetch('/api/ai/generate-article', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(params),
-  });
+  try {
+    // Get the current session
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error('No authentication session');
+    }
 
-  if (!response.ok) {
-    throw new Error('Failed to generate article');
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-enhanced-article`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to generate article');
+    }
+
+    const { content } = await response.json();
+    return content || '';
+  } catch (error) {
+    console.error('Error generating article:', error);
+    alert(error instanceof Error ? error.message : 'Failed to generate article');
+    throw error;
   }
-
-  return response.json();
 };
 
 const isDefaultTitle = (title: string) => {
@@ -229,12 +244,10 @@ const HelpCenterView = () => {
           uniqueCollections.set(collection.id, collection);
         });
 
-        // Convert Map back to array and filter for public articles
+        // Filter for public and published articles
         const collectionsWithPublicArticles = Array.from(uniqueCollections.values())
           .map(collection => ({
-            id: collection.id,
-            title: collection.title,
-            organizations_id: collection.organizations_id,
+            ...collection,
             articles: (collection.articles || [])
               .filter(article => article.is_public && article.is_published)
               .map(article => ({
@@ -1036,6 +1049,11 @@ const HelpCenterView = () => {
                           return;
                         }
                         
+                        if (isDefaultTitle(selectedArticle.title)) {
+                          alert('Please enter a title for the article');
+                          return;
+                        }
+                        
                         setIsGeneratingArticle(true);
                         try {
                           const article = await generateArticle({
@@ -1045,14 +1063,12 @@ const HelpCenterView = () => {
                             collectionId: selectedArticle.collection_id
                           });
                           
-                          if (selectedArticle) {
-                            setSelectedArticle({
-                              ...selectedArticle,
-                              content: article.content || ''
-                            });
-                          }
+                          setSelectedArticle({
+                            ...selectedArticle,
+                            content: article
+                          });
                         } catch (error) {
-                          console.error('Error generating article:', error);
+                          // Error is already handled in generateArticle
                         } finally {
                           setIsGeneratingArticle(false);
                         }
@@ -1332,10 +1348,10 @@ const HelpCenterView = () => {
                           
                           setNewArticle(prev => ({
                             ...prev,
-                            content: article.content || ''
+                            content: article
                           }));
                         } catch (error) {
-                          console.error('Error generating article:', error);
+                          // Error is already handled in generateArticle
                         } finally {
                           setIsGeneratingArticle(false);
                         }

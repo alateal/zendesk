@@ -74,13 +74,38 @@ export class LangchainService {
     this.tavilyClient = tavily({ apiKey: config.tavilyApiKey });
   }
 
+  private async withTimeout<T>(
+    promise: Promise<T>, 
+    timeoutMs: number = 10000, // 10 seconds default
+    context: string = ''
+  ): Promise<T> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Operation timed out after ${timeoutMs}ms: ${context}`));
+      }, timeoutMs);
+    });
+
+    return Promise.race([promise, timeoutPromise]);
+  }
+
   private async scrapeAndProcessUrl(url: string): Promise<Document[]> {
     try {
       console.log(`📄 Processing URL: ${url}`);
-      const loader = new CheerioWebBaseLoader(url, {
-        selector: 'body, article, .article, .content, main, .container, .page-content, #content, .main-content',
-      });
-      const docs = await loader.load();
+      
+      // Increase timeout to 30 seconds
+      const docs = await this.withTimeout(
+        new CheerioWebBaseLoader(url, {
+          selector: 'body, article, .article, .content, main, .container, .page-content, #content, .main-content, .faq, .help-content',
+        }).load(),
+        30000, // 30 second timeout
+        `Loading content from ${url}`
+      );
+
+      if (docs.length === 0) {
+        console.log(`⚠️ No content extracted from: ${url}`);
+        return [];
+      }
+
       console.log(`✅ Successfully loaded content from: ${url}`);
 
       // Add source metadata
@@ -97,7 +122,11 @@ export class LangchainService {
       console.log(`📑 Split into ${splitDocs.length} chunks from: ${url}`);
       return splitDocs;
     } catch (error) {
-      console.error(`❌ Error processing URL ${url}:`, error);
+      if (error instanceof Error && error.message.includes('timed out')) {
+        console.log(`⏱️ Skipping slow URL ${url}: ${error.message}`);
+      } else {
+        console.error(`❌ Error processing URL ${url}:`, error);
+      }
       return [];
     }
   }
@@ -113,23 +142,44 @@ export class LangchainService {
       if (!orgData) return this.searchIndustryHelpCenters(topic);
 
       // First, get relevant competitors based on the organization's name
+      const searchQueries = [
+        `${orgData.name} top luxury brand competitors market analysis`,
+        `${orgData.name} main competitors luxury segment`,
+        `top luxury brands competing with ${orgData.name}`,
+        `${orgData.name} competitor brands luxury market`
+      ];
+
+      // Randomly select one query
+      const selectedQuery = searchQueries[Math.floor(Math.random() * searchQueries.length)];
+
       const competitorSearch = await this.tavilyClient.search(
-        `${orgData.name} top luxury brand competitors market analysis`, {
+        selectedQuery, {
           searchDepth: "advanced",
-          maxResults: 2
+          maxResults: 3,
+          // Add time parameter to get recent results
+          endDate: new Date().toISOString()
         }
       );
 
-      // Extract competitor names using GPT with a more strict prompt
+      // Combine and deduplicate results
+      const combinedResults = competitorSearch.results.map(r => r.content);
+
+      // Extract competitor names with more context
       const competitorAnalysis = await this.model.invoke(
-        `Based on this market research, identify the top 3 direct competitors of ${orgData.name}.
-         Market Research: ${competitorSearch.results.map(r => r.content).join('\n')}
+        `Analyze these market research results and identify direct competitors of ${orgData.name}.
+         Consider factors like:
+         - Market segment overlap
+         - Price point similarity
+         - Brand positioning
+         - Geographic presence
+
+         Market Research: ${combinedResults.join('\n')}
          
          Instructions:
          1. Return ONLY a valid JSON array of lowercase brand names
-         2. Format example: ["brandname1", "brandname2", "brandname3"]
-         3. No explanation, just the JSON array
-         4. No periods or other punctuation
+         2. Format: ["brandname1", "brandname2", "brandname3"]
+         3. Include only true luxury brand competitors
+         4. Exclude non-luxury or mass-market brands
          
          Response:`
       );
@@ -149,7 +199,8 @@ export class LangchainService {
         }
         competitors = competitors
           .filter(c => typeof c === 'string')
-          .map(c => c.toLowerCase().trim());
+          .map(c => c.toLowerCase().trim())
+          .slice(0, 3); // Limit to top 3 competitors
       } catch (parseError) {
         console.error('Error parsing competitor names:', parseError);
         competitors = [];
@@ -160,16 +211,18 @@ export class LangchainService {
       // Search specifically for competitor help center content
       const competitorSearchPromises = competitors.map(competitor => 
         this.tavilyClient.search(
-          `${competitor} ${topic} help center OR customer service OR support guide`, {
+          `${competitor} ${topic} help center OR faq OR customer service OR support guide`, {
             searchDepth: "basic",
-            maxResults: 1,
+            maxResults: 2, // Reduced from 3 to 2 to ensure total results stay under 5
             filterWebResults: true
           }
         )
       );
 
       const competitorResults = await Promise.all(competitorSearchPromises);
-      const allResults = competitorResults.flatMap(result => result.results);
+      const allResults = competitorResults
+        .flatMap(result => result.results)
+        .slice(0, 5); // Limit total results to 5
 
       console.log('🔍 Competitor help center results:', 
         allResults.map(r => ({
@@ -179,13 +232,30 @@ export class LangchainService {
         }))
       );
 
-      return allResults
+      // Modify URL filtering to be less strict
+      const validUrls = allResults
         .filter(result => {
           const url = result.url.toLowerCase();
-          // Only include results from competitor domains
-          return competitors.some(competitor => url.includes(competitor));
+          // Include more general help content URLs
+          return (
+            url.includes('help') || 
+            url.includes('support') || 
+            url.includes('faq') || 
+            url.includes('customer-service') ||
+            competitors.some(competitor => url.includes(competitor))
+          );
         })
-        .map(result => result.url);
+        .map(result => result.url)
+        .slice(0, 3);
+
+      console.log('🔍 Valid URLs to process:', validUrls);
+
+      // Process the URLs
+      const processedDocs = await this.processHelpCenterUrls(validUrls);
+      console.log(`📄 Processed ${processedDocs.length} documents from competitor help centers`);
+
+      return processedDocs.length > 0 ? validUrls : this.searchIndustryHelpCenters(topic);
+
     } catch (error) {
       console.error('Error searching help centers:', error);
       return this.searchIndustryHelpCenters(topic);
@@ -203,16 +273,22 @@ export class LangchainService {
   }
 
   private async processHelpCenterUrls(urls: string[]): Promise<Document[]> {
-    // Process URLs in parallel instead of sequentially
-    const docPromises = urls.map(url => this.scrapeAndProcessUrl(url));
-    const docsArrays = await Promise.all(docPromises);
+    // Process URLs in parallel
+    const results = await Promise.allSettled(
+      urls.map(url => this.scrapeAndProcessUrl(url))
+    );
     
-    // Flatten and limit the documents
-    const allDocs = docsArrays
+    // Filter out failed attempts and flatten results
+    const successfulDocs = results
+      .filter((result): result is PromiseFulfilledResult<Document[]> => 
+        result.status === 'fulfilled' && result.value.length > 0
+      )
+      .map(result => result.value)
       .flat()
-      .slice(0, 3);
+      .slice(0, 3); // Still limit to 3 documents
 
-    return allDocs;
+    console.log(`📊 Successfully processed ${successfulDocs.length} documents from ${results.length} URLs`);
+    return successfulDocs;
   }
 
   async learnFromHelpCenters(topic: string, organizationId: string): Promise<string> {
@@ -336,8 +412,8 @@ export class LangchainService {
          - Write from ${brandName}'s perspective using "we," "our," and "us"
          - Be precise and elegant
          - Include only essential information
-         - Write 1-2 concise paragraphs only
-         - Each paragraph should be 2-3 sentences maximum
+         - Write 1-2 brief and concise paragraphs only, prefer 1 paragraph
+         - Each paragraph should be 1-2 sentences maximum
          - Use respectful, sophisticated language
          - No redundant explanations
          - Do not use quotation marks or bullet points
@@ -578,7 +654,8 @@ export class LangchainService {
          - Use "we" when referring to CHANEL
          - Focus on the most relevant information
          - Maintain a sophisticated tone
-         - Keep response to 2-3 sentences maximum`
+         - Keep response to 2-3 sentences maximum
+         - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent`
       );
 
       await run.end({

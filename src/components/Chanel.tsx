@@ -325,9 +325,13 @@ const Chanel = () => {
     try {
       if (!skipRating && rating && conversationId) {
         setIsSubmittingRating(true);
+        // Update the satisfaction_score in the conversations table
         const { error } = await supabase
           .from('conversations')
-          .update({ satisfaction_score: rating.toString() })
+          .update({ 
+            satisfaction_score: rating.toString(),
+            status: 'Closed'  // Also close the conversation when user leaves
+          })
           .eq('id', conversationId);
 
         if (error) throw error;

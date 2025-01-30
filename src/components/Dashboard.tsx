@@ -589,12 +589,17 @@ const Dashboard = () => {
     }
   };
 
-  // Add close conversation handler
+  // Update the close conversation handler
   const handleCloseConversation = async () => {
     if (!selectedApp) return;
     
-    await updateConversationStatus(selectedApp, 'Closed');
-    setSelectedApp(null); // Optionally clear the selection
+    try {
+      await updateConversationStatus(selectedApp, 'Closed');
+      setSelectedApp(null); // Clear the selection
+      setMessages([]); // Clear the messages
+    } catch (error) {
+      console.error('Error closing conversation:', error);
+    }
   };
 
   // Add useEffect to count new conversations
@@ -640,7 +645,7 @@ const Dashboard = () => {
     };
   }, [selectedOrg]);
 
-  // Add useEffect for real-time conversation updates
+  // Update the useEffect for real-time conversation updates
   useEffect(() => {
     if (!selectedOrg) return;
 
@@ -688,7 +693,8 @@ const Dashboard = () => {
                 const newConversations = [...prevConversations];
                 newConversations[index] = {
                   ...newConversations[index],
-                  ...updatedConversation
+                  ...updatedConversation,
+                  satisfaction_score: payload.new.satisfaction_score // Ensure this gets updated
                 };
                 return newConversations;
               } else {
@@ -696,6 +702,18 @@ const Dashboard = () => {
                 return [...prevConversations, updatedConversation];
               }
             });
+
+            // Update satisfaction stats when a rating changes
+            if (payload.new.satisfaction_score) {
+              setSatisfactionStats(prevStats => {
+                const allConversations = conversations.map(conv => 
+                  conv.id === payload.new.id ? 
+                    { ...conv, satisfaction_score: payload.new.satisfaction_score } : 
+                    conv
+                );
+                return calculateSatisfactionStats(allConversations);
+              });
+            }
           }
         }
       )
@@ -707,23 +725,25 @@ const Dashboard = () => {
     };
   }, [selectedOrg]);
 
-  // Simplify the calculation function
+  // Update the calculateSatisfactionStats function to be more robust
   const calculateSatisfactionStats = (conversations: Conversation[]) => {
     const ratedConversations = conversations.filter(conv => 
-      conv.satisfaction_score !== null && conv.satisfaction_score !== undefined
+      conv.satisfaction_score !== null && 
+      conv.satisfaction_score !== undefined &&
+      conv.satisfaction_score !== ''
     );
+    
     const totalRatings = ratedConversations.length;
     
     if (totalRatings === 0) return { averageScore: 0, totalRatings: 0 };
     
     const sum = ratedConversations.reduce((acc, conv) => {
-      // Parse the satisfaction_score as a number
-      const score = parseInt(conv.satisfaction_score || '0', 10);
-      return acc + score;
+      const score = parseFloat(conv.satisfaction_score || '0');
+      return acc + (isNaN(score) ? 0 : score);
     }, 0);
     
     return {
-      averageScore: Math.round((sum / totalRatings) * 10) / 10, // Round to 1 decimal
+      averageScore: Math.round((sum / totalRatings) * 10) / 10,
       totalRatings
     };
   };
@@ -1707,25 +1727,27 @@ const Dashboard = () => {
           <div className="p-6 border-b border-[#8B4513]">
             <div className="flex items-center justify-between h-9">
               <h2 className="text-xl font-semibold text-[#3C1810]">
-                {getCurrentConversation()?.channels || 'New Chat'}
+                {getCurrentConversation()?.channels || 'Welcome'}
               </h2>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleCloseConversation}
-                  className="px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg"
-                >
-                  Close Chat
-                </button>
-                <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
-                  <IconDotsVertical size={20} />
-                </button>
-              </div>
+              {selectedApp && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCloseConversation}
+                    className="px-4 py-2 text-[#3C1810] hover:bg-[#F5E6D3] rounded-lg"
+                  >
+                    Close Chat
+                  </button>
+                  <button className="p-2 rounded-lg text-[#3C1810] hover:bg-[#F5E6D3]">
+                    <IconDotsVertical size={20} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Messages */}
           <div className="flex-1 p-6 overflow-y-auto bg-[#FDF6E3]">
-          {messages.length === 0 ? (
+            {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full">
                 <img 
                   src="/mustache.png" 
@@ -1739,39 +1761,41 @@ const Dashboard = () => {
                   Choose a conversation to start helping your customer.
                 </p>
               </div>
-          ) : (
-            <div className="space-y-4">
-              {renderMessages(messages)}
+            ) : (
+              <div className="space-y-4">
+                {renderMessages(messages)}
+              </div>
+            )}
+          </div>
+
+          {/* Input Box */}
+          {selectedApp && (
+            <div className="p-4 border-t border-[#8B4513]">
+              <div className="flex space-x-4">
+                <input
+                  type="text"
+                  placeholder="Type your message..."
+                  className="flex-1 px-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                />
+                <button 
+                  onClick={sendMessage}
+                  className="px-6 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center space-x-2"
+                >
+                  <IconSend size={20} />
+                  <span>Send</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
-
-        {/* Input Box */}
-          <div className="p-4 border-t border-[#8B4513]">
-          <div className="flex space-x-4">
-            <input
-              type="text"
-              placeholder="Type your message..."
-              className="flex-1 px-4 py-2 rounded-lg border border-[#8B4513] focus:outline-none focus:ring-2 focus:ring-[#8B4513] bg-[#FDF6E3]"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
-              }}
-            />
-            <button 
-              onClick={sendMessage}
-              className="px-6 py-2 bg-[#8B4513] text-[#FDF6E3] rounded-lg hover:bg-[#5C2E0E] flex items-center space-x-2"
-            >
-              <IconSend size={20} />
-              <span>Send</span>
-            </button>
-          </div>
-        </div>
-      </div>
 
         {/* Insights Sidebar */}
         <div className="w-80 border-l border-[#8B4513] bg-[#FDF6E3] p-4">
