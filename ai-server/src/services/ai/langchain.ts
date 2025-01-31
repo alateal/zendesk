@@ -618,186 +618,176 @@ export class LangchainService {
     }
   }
 
-  async findSimilarArticles(query: string, organizationId: string): Promise<Array<{
-    id: string;
-    content: string;
-    title?: string;
-    similarity: number;
-  }>> {
-    let parentRun;
+  async findSimilarArticles(query: string, organizationId: string): Promise<any[]> {
     try {
-      // Create parent run for deflection
-      parentRun = await this.client.createRun({
-        name: "AI Deflection",
-        run_type: "chain",
-        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
-        inputs: { 
-          query,
-          organizationId
-        }
-      });
+      // 1. Clean and enhance query
+      const enhancedQuery = query
+        .toLowerCase()
+        .trim()
+        + ' customer service help support';
 
-      // Create child run for embedding generation
-      const embeddingRun = await this.client.createRun({
-        name: "Generate Query Embedding",
-        run_type: "embedding",
-        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
-        parent_run_id: parentRun?.id,
-        inputs: { query }
-      });
+      // 2. Get embedding with timeout protection
+      const embedding = await this.withTimeout(
+        this.embeddings.embedQuery(enhancedQuery),
+        5000,
+        'Generating query embedding'
+      );
 
-      const queryEmbedding = await this.createEmbedding(query);
-
-      if (embeddingRun) {
-        await embeddingRun.end({
-          outputs: { embedding_length: queryEmbedding.length }
-        });
-        await embeddingRun.patchRun();
-      }
-
-      // Create child run for similarity search
-      const searchRun = await this.client.createRun({
-        name: "Similarity Search",
-        run_type: "chain",
-        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
-        parent_run_id: parentRun?.id,
-        inputs: { 
-          queryEmbedding,
-          organizationId
-        }
-      });
-
-      // First, let's check if we have any embeddings in the database
-      const { data: checkEmbeddings, error: checkError } = await this.supabase
-        .from('ai_content_chunks')
-        .select('count')
-        .eq('organizations_id', organizationId);
-      
-      console.log('3. Existing embeddings check:', { checkEmbeddings, checkError });
-
-      // Perform the similarity search with a lower threshold
-      const { data: similarArticles, error } = await this.supabase.rpc(
+      // 3. Match articles with correct parameter types
+      const { data: initialResults, error } = await this.supabase.rpc(
         'match_articles',
         {
-          query_embedding: queryEmbedding,
-          match_threshold: 0.5, // Lowered from 0.7 to catch more matches
-          match_count: 3,      // Increased from 3 to get more potential matches
+          query_embedding: embedding,
+          match_threshold: 0.5,
+          match_count: 5,
           p_organization_id: organizationId
         }
       );
 
-      console.log('4. Similarity search results:', {
-        similarArticles,
-        error,
-        count: similarArticles?.length || 0
-      });
+      if (error) throw error;
+      if (!initialResults?.length) return [];
 
-      if (error) {
-        console.error('Error in similarity search:', error);
-        return [];
-      }
-
-      if (!similarArticles || similarArticles.length === 0) {
-        console.log('No similar articles found');
-        return [];
-      }
-
-      // Get the article IDs we found
-      const articleIds = similarArticles.map(match => match.id);
-      console.log('5. Looking up articles with IDs:', articleIds);
-
-      // Look up the full articles
-      const { data: articlesContent, error: articlesError } = await this.supabase
+      // 4. Fetch full article data for matched articles
+      const articleIds = initialResults.map(result => result.id);
+      const { data: articles } = await this.supabase
         .from('articles')
-        .select('id, content, title, is_published, is_public')
+        .select('id, title, content, description')
         .in('id', articleIds)
-        .eq('is_published', true)
-        .eq('is_public', true);
+        .eq('organizations_id', organizationId);
 
-      console.log('6. Articles content lookup:', {
-        articlesContent,
-        articlesError,
-        count: articlesContent?.length || 0
-      });
+      if (!articles) return [];
 
-      if (articlesError || !articlesContent) {
-        console.error('Error looking up articles:', articlesError);
-        return [];
-      }
-
-      // Map the results together
-      const results = similarArticles.map(match => {
-        const article = articlesContent.find(a => a.id === match.id);
+      // 5. Combine similarity scores with article content
+      const enrichedResults = initialResults.map(result => {
+        const article = articles.find(a => a.id === result.id);
         return {
-          id: match.id,
-          content: article?.content || '',
-          title: article?.title,
-          similarity: match.similarity
+          ...article,
+          similarity: result.similarity,
+          relevanceScore: article ? this.calculateRelevanceScore(query, {
+            ...article,
+            similarity: result.similarity
+          }) : 0
         };
-      });
+      }).filter(result => result.content); // Only return articles with content
 
-      console.log('7. Final results:', {
-        count: results.length,
-        similarities: results.map(r => r.similarity),
-        titles: results.map(r => r.title)
-      });
-
-      if (searchRun) {
-        await searchRun.end({
-          outputs: { 
-            results_count: results.length,
-            similarities: results.map(r => r.similarity)
-          }
-        });
-        await searchRun.patchRun();
-      }
-
-      if (parentRun) {
-        await parentRun.end({
-          outputs: { 
-            results_count: results.length,
-            found_matches: results.length > 0
-          }
-        });
-        await parentRun.patchRun(false);
-      }
-
-      return results;
+      // 6. Return top 3 most relevant results
+      return enrichedResults
+        .sort((a, b) => b.relevanceScore - a.relevanceScore)
+        .slice(0, 3);
 
     } catch (error) {
       console.error('Error in findSimilarArticles:', error);
-      // End the parent run with error if it exists
-      if (parentRun) {
-        await parentRun.end({
-          error: error instanceof Error ? error.message : "Unknown error"
-        });
-        await parentRun.patchRun(false);
-      }
       throw error;
     }
   }
 
-  async generateChatResponse(question: string, articleContent: string): Promise<string> {
-    try {
-      let run;
-      try {
-        // Create run for chat response generation
-        run = await this.client.createRun({
-          name: "Generate Chat Response",
-          run_type: "llm",
-          project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
-          inputs: {
-            question,
-            articleContent
-          }
-        });
-      } catch (runError) {
-        console.warn('Failed to create LangSmith run:', runError);
-        // Continue without run tracking if it fails
-      }
+  private calculateRelevanceScore(query: string, article: any): number {
+    const queryTerms = new Set(query.toLowerCase().split(/\s+/));
+    
+    // Calculate title match score with null check
+    let titleScore = 0;
+    if (article.title) {
+      const titleTerms = new Set(article.title.toLowerCase().split(/\s+/));
+      const titleMatches = [...queryTerms].filter(term => titleTerms.has(term)).length;
+      titleScore = titleMatches / queryTerms.size;
+    }
 
-      const response = await this.model.invoke(
-        `You are Agent Dali, a helpful but sophisticated CHANEL customer service AI. 
+    // Calculate content match score with fallback
+    const contentScore = article.similarity || 0;
+
+    // Weighted combination
+    // If no title, weight content score more heavily
+    return article.title 
+      ? (titleScore * 0.4) + (contentScore * 0.6)
+      : contentScore;
+  }
+
+  // New helper methods
+  private async preprocessQuery(query: string): Promise<string> {
+    // Remove noise and normalize
+    const cleaned = query
+      .toLowerCase()
+      .replace(/[^\w\s?]/g, '')
+      .trim();
+
+    // Expand common abbreviations
+    const expanded = cleaned
+      .replace(/govt/g, 'government')
+      .replace(/asap/g, 'as soon as possible')
+      // Add more common abbreviations
+
+    // Add context terms for better matching
+    return `${expanded} customer service help support`;
+  }
+
+  private async rerankResults(results: any[], query: string): Promise<any[]> {
+    // Use semantic similarity to rerank results
+    const reranked = await Promise.all(
+      results.map(async (result) => {
+        try {
+          // Get embeddings for title and content
+          const titleEmbedding = await this.embeddings.embedQuery(result.title || '');
+          const contentEmbedding = await this.embeddings.embedQuery(
+            result.content?.substring(0, 1000) || ''
+          );
+          
+          // Calculate semantic scores
+          const titleScore = await this.calculateCosineSimilarity(
+            titleEmbedding,
+            await this.embeddings.embedQuery(query)
+          );
+          
+          const contentScore = await this.calculateCosineSimilarity(
+            contentEmbedding,
+            await this.embeddings.embedQuery(query)
+          );
+
+          // Weighted combination of scores
+          const combinedScore = (titleScore * 0.4) + (contentScore * 0.6);
+          
+          return {
+            ...result,
+            similarity: combinedScore
+          };
+        } catch (error) {
+          console.warn('Error reranking result:', error);
+          return result;
+        }
+      })
+    );
+
+    // Sort by combined score
+    return reranked.sort((a, b) => b.similarity - a.similarity);
+  }
+
+  private calculateCosineSimilarity(embedding1: number[], embedding2: number[]): number {
+    const dotProduct = embedding1.reduce((sum, val, i) => sum + val * embedding2[i], 0);
+    const norm1 = Math.sqrt(embedding1.reduce((sum, val) => sum + val * val, 0));
+    const norm2 = Math.sqrt(embedding2.reduce((sum, val) => sum + val * val, 0));
+    return dotProduct / (norm1 * norm2);
+  }
+
+  async generateChatResponse(question: string, articleContent: string): Promise<string> {
+    let parentRun;
+    try {
+      // Create parent run for chat deflection
+      parentRun = await this.client.createRun({
+        name: "Chat Deflection",
+        run_type: "chain",
+        project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
+        inputs: {
+          question,
+          articleContent
+        }
+      });
+
+      console.log('Generating response for:', { question, articleContent });
+
+      let response = '';
+      
+      // Use the model directly for more reliable response
+      const result = await this.model.invoke(
+        `You are Ai Dali, a helpful but sophisticated CHANEL customer service AI. 
          Using the provided article content, answer the customer's question in a concise, 
          friendly, and professional manner. Keep your response brief (2-3 sentences max) 
          while maintaining CHANEL's elegant tone.
@@ -815,41 +805,47 @@ export class LangchainService {
          - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent`
       );
 
-      // Only try to end the run if it was successfully created
-      if (run) {
-        try {
-          await run.end({
-            outputs: { response: response.content.toString() }
-          });
-          await run.patchRun();
-        } catch (runEndError) {
-          console.warn('Failed to end LangSmith run:', runEndError);
-          // Continue even if run tracking fails
-        }
+      response = result.content.toString();
+      console.log('Generated response:', response);
+
+      // End parent run
+      if (parentRun) {
+        await parentRun.end({
+          outputs: { 
+            finalResponse: response,
+            questionAnswered: true
+          }
+        });
+        await parentRun.patchRun(false);
       }
 
-      return response.content.toString();
+      return response;
+
     } catch (error) {
       console.error('Error generating chat response:', error);
+      if (parentRun) {
+        await parentRun.end({
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+        await parentRun.patchRun(false);
+      }
       throw error;
     }
   }
 
-  // Add this new method for streaming responses
+  // Update streamOpenAIResponse to return void since we're using the callback
   private async streamOpenAIResponse(
     prompt: string,
-    onProgress?: (chunk: string) => void
-  ): Promise<string> {
-    const response = await this.model.invoke(prompt, {
+    onProgress: (chunk: string) => void
+  ): Promise<void> {
+    await this.model.invoke(prompt, {
       callbacks: [{
         handleLLMNewToken(token: string) {
-          onProgress?.(token);
+          onProgress(token);
         },
       }],
       stream: true
     });
-
-    return response.content.toString();
   }
 
   private async scrapeAndProcessUrl(url: string): Promise<Document[]> {

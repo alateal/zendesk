@@ -18,8 +18,25 @@ interface Message {
   is_typing?: boolean;
 }
 
-// Add new types at the top
-type ConversationStatus = 'New' | 'Active' | 'Pending_Handoff' | 'Handed_Off' | 'Closed' | 'AI_Chat';
+// Update conversation status type
+type ConversationStatus = 'New' | 'AI_Chat' | 'Pending_Handoff' | 'Active' | 'Closed';
+
+// Define valid status transitions with assignment states
+const STATUS_TRANSITIONS = {
+  New: { next: ['AI_Chat'], assignment: { is_assigned: true, assigned_to: 'ai-dali' } },
+  AI_Chat: { next: ['Pending_Handoff', 'Closed'], assignment: { is_assigned: true, assigned_to: 'ai-dali' } },
+  Pending_Handoff: { next: ['Active'], assignment: { is_assigned: false, assigned_to: null } },
+  Active: { next: ['Closed'], assignment: null }, // Assignment handled by agent dashboard
+  Closed: { next: [], assignment: null }
+} as const;
+
+type ConversationUpdate = {
+  status?: ConversationStatus;
+  satisfaction_score?: string;
+  closed_at?: string;
+  assigned_to?: string | null;
+  is_assigned?: boolean;
+};
 
 interface Conversation {
   id: string;
@@ -74,7 +91,7 @@ const Chanel = () => {
   // Update the useEffect for initial greeting
   useEffect(() => {
     if (userInfo && !messages.some(m => m.id === 'greeting')) {  // Check if greeting doesn't exist
-      const initialGreeting = `Hello ${userInfo.fullName}! I'm Agent Dali, CHANEL's virtual assistant. How may I assist you today?`;
+      const initialGreeting = `Hello ${userInfo.fullName}! I'm Ai Dali, CHANEL's virtual assistant. How may I assist you today?`;
       
       setIsAiTyping(true);
       setTimeout(() => {
@@ -137,68 +154,71 @@ const Chanel = () => {
     }
   };
 
+  const handleConversationUpdate = async (
+    conversationId: string,
+    updates: ConversationUpdate
+  ) => {
+    try {
+      // Get current status to determine proper transition
+      const { data: currentConv } = await supabase
+        .from('conversations')
+        .select('status')
+        .eq('id', conversationId)
+        .single();
+
+      if (!currentConv) throw new Error('Conversation not found');
+
+      // Get assignment details for the new status
+      const statusTransition = STATUS_TRANSITIONS[currentConv.status as keyof typeof STATUS_TRANSITIONS];
+      const newStatus = updates.status;
+
+      if (newStatus && !statusTransition.next.includes(newStatus)) {
+        throw new Error(`Invalid status transition from ${currentConv.status} to ${newStatus}`);
+      }
+
+      // Merge assignment details if status is changing
+      const finalUpdates = {
+        ...updates,
+        ...(newStatus && STATUS_TRANSITIONS[newStatus].assignment 
+            ? STATUS_TRANSITIONS[newStatus].assignment 
+            : {})
+      };
+
+      const { error } = await supabase
+        .from('conversations')
+        .update(finalUpdates)
+        .eq('id', conversationId);
+
+      if (error) throw error;
+
+      // Add system message for status changes
+      if (updates.status) {
+        await supabase.from('messages').insert([{
+          conversations_id: conversationId,
+          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+          sender_id: 'system',
+          sender_type: 'system',
+          content: getStatusMessage(updates.status)
+        }]);
+      }
+    } catch (error) {
+      console.error('Error updating conversation:', error);
+      throw error;
+    }
+  };
+
   const handleHumanHandoff = async () => {
-    if (!userInfo) return;
+    if (!userInfo || !conversationId) return;
     
     try {
       setIsHandingOff(true);
-
-      // Get customer info
-      const { data: customer, error: customerError } = await supabase
-        .from('customers')
-        .select('id')
-        .eq('email', userInfo.email)
-        .single();
-
-      if (customerError) throw customerError;
-
-      // Create conversation for handoff
-      const { data: newConversation, error: conversationError } = await supabase
-        .from('conversations')
-        .insert([{
-          customer_id: customer.id,
-          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-          channels: 'Website',
-          status: 'Pending_Handoff'
-        }])
-        .select()
-        .single();
-
-      if (conversationError) throw conversationError;
-      
-      const newConversationId = newConversation.id;
-      setConversationId(newConversationId);
-      localStorage.setItem('chatConversationId', newConversationId);
-      setConversationStatus('Pending_Handoff');
-
-      // Add all previous messages to the conversation
-      const messagesToAdd = messages.map(msg => ({
-        content: msg.content,
-        conversations_id: newConversationId,
-        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-        sender_id: msg.sender_type === 'customer' ? customer.id : 'ai-agent',
-        sender_type: msg.sender_type,
-        created_at: msg.created_at
-      }));
-
-      await supabase.from('messages').insert(messagesToAdd);
-
-      // Add handoff message
-      await supabase.from('messages').insert([{
-        content: "I'm connecting you with a CHANEL Client Care Advisor. Please wait a moment.",
-        conversations_id: newConversationId,
-        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-        sender_id: 'system',
-        sender_type: 'system'
-      }]);
-
+      await handleConversationUpdate(conversationId, {
+        status: 'Pending_Handoff',
+        is_assigned: false
+      });
     } catch (error) {
       console.error('Error in human handoff:', error);
-      if (error instanceof Error) {
-        alert(error.message);
-      } else {
-        alert('Unable to connect to a human agent at this time. Please try again.');
-      }
+      alert('Unable to connect to a human agent at this time.');
     } finally {
       setIsHandingOff(false);
     }
@@ -339,37 +359,39 @@ const Chanel = () => {
     setShowRatingModal(true);
   };
 
-  const handleFinalLogout = async (skipRating: boolean = false) => {
-    if (!skipRating && !rating) {
-      alert('Please select a rating before leaving');
-      return;
-    }
-
+  const handleFinalLogout = async (skip: boolean = false) => {
     try {
-      if (!skipRating && rating && conversationId) {
-        setIsSubmittingRating(true);
-        // Update the satisfaction_score in the conversations table
-        const { error } = await supabase
-          .from('conversations')
-          .update({ 
-            satisfaction_score: rating.toString(),
-            status: 'Closed'  // Also close the conversation when user leaves
-          })
-          .eq('id', conversationId);
+      setIsSubmittingRating(true);
 
-        if (error) throw error;
+      if (conversationId) {
+        const updates: ConversationUpdate = {
+          status: 'Closed',
+          closed_at: new Date().toISOString()
+        };
+
+        if (!skip && rating > 0) {
+          updates.satisfaction_score = rating.toString();
+        }
+
+        await handleConversationUpdate(conversationId, updates);
       }
-    } catch (error) {
-      console.error('Error saving rating:', error);
-    } finally {
-      setIsSubmittingRating(false);
-      localStorage.removeItem('chatUserInfo');
+
+      // Clear local storage and reset states
       localStorage.removeItem('chatConversationId');
+      localStorage.removeItem('chatUserInfo');
       setUserInfo(null);
       setConversationId(null);
       setMessages([]);
-      setIsOpen(false);
       setShowRatingModal(false);
+      setRating(0);
+      setIsOpen(false);
+      setConversationStatus('New');
+
+    } catch (error) {
+      console.error('Error closing conversation:', error);
+      alert('Error updating conversation. Please try again.');
+    } finally {
+      setIsSubmittingRating(false);
     }
   };
 
@@ -460,6 +482,52 @@ const Chanel = () => {
     };
   }, [conversationId]);
 
+  // Update real-time subscription for conversation status
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const conversationSubscription = supabase
+      .channel('conversation-status')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'conversations',
+          filter: `id=eq.${conversationId}`
+        },
+        (payload) => {
+          const newStatus = payload.new.status as ConversationStatus;
+          setConversationStatus(newStatus);
+          
+          // Handle different status changes
+          switch (newStatus) {
+            case 'Handed_Off':
+              // Show message that agent has joined
+              setMessages(prev => [...prev, {
+                id: 'system-handoff',
+                content: 'A CHANEL Client Care Advisor has joined the conversation.',
+                created_at: new Date().toISOString(),
+                sender_type: 'system'
+              }]);
+              break;
+            
+            case 'Closed':
+              // Clean up UI
+              setShowRatingModal(false);
+              setRating(0);
+              setIsOpen(false);
+              break;
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      conversationSubscription.unsubscribe();
+    };
+  }, [conversationId]);
+
   // Add a test button temporarily
   const testSimilarity = async () => {
     try {
@@ -488,7 +556,7 @@ const Chanel = () => {
         <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
         <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
       </div>
-      <span className="text-sm text-gray-500">Agent Dali is typing...</span>
+      <span className="text-sm text-gray-500">Ai Dali is typing...</span>
     </div>
   );
 
