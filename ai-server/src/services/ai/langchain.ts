@@ -88,89 +88,76 @@ export class LangchainService {
     return Promise.race([promise, timeoutPromise]);
   }
 
-  private async scrapeAndProcessUrl(url: string): Promise<Document[]> {
-    try {
-      console.log(`📄 Processing URL: ${url}`);
-      
-      // More specific selectors for help content
-      const docs = await this.withTimeout(
-        new CheerioWebBaseLoader(url, {
-          selector: `
-            .help-article,
-            .faq-content,
-            .article-content,
-            .support-content,
-            #help-content,
-            [data-testid*="help"],
-            [data-testid*="faq"],
-            [data-testid*="support"],
-            .knowledge-base-article,
-            div[class*="article"] div[class*="content"],
-            div[class*="help"] div[class*="content"],
-            div[class*="faq"] div[class*="content"]
-          `.trim(),
-          // Remove script tags and other non-content elements
-          scriptSelectors: [
-            'script',
-            'style',
-            'header',
-            'footer',
-            'nav',
-            '.cookie-banner',
-            '#cookie-banner',
-            '.navigation',
-            '.menu',
-            '.sidebar'
-          ]
-        }).load(),
-        30000,
-        `Loading content from ${url}`
-      );
+  private isValidHelpContent(content: string | undefined): boolean {
+    // Guard against undefined or null content
+    if (!content || typeof content !== 'string') return false;
 
-      // Validate content quality
-      if (docs.length === 0 || !this.isValidHelpContent(docs[0].pageContent)) {
-        console.log(`⚠️ No valid help content found in: ${url}`);
-        return [];
-      }
+    // More lenient length check
+    const minLength = 50; // Reduced from 100
+    if (content.length < minLength) return false;
 
-      console.log(`✅ Successfully loaded help content from: ${url}`);
+    // Quick content validation using regex for better performance
+    const scriptPattern = /function\s*\(|=>|{|}|\[|\]/;
+    if (scriptPattern.test(content)) return false;
 
-      // Add source metadata
-      docs.forEach(doc => {
-        doc.metadata.source = url;
-      });
+    // More lenient content validation
+    const validationPatterns = [
+      // Help-related terms
+      /how|what|when|where|why|can|do|does|is|are|help|support|service|guide|faq/i,
+      // Common customer service phrases
+      /customer|contact|call|email|phone|visit|store|shop|return|exchange|repair/i,
+      // Action words
+      /find|get|make|need|want|request|provide|offer|available|please/i
+    ];
 
-      const splitter = new RecursiveCharacterTextSplitter({
-        chunkSize: 1000,
-        chunkOverlap: 200,
-      });
-
-      const splitDocs = await splitter.splitDocuments(docs);
-      console.log(`📑 Split into ${splitDocs.length} chunks from: ${url}`);
-      return splitDocs;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('timed out')) {
-        console.log(`⏱️ Skipping slow URL ${url}: ${error.message}`);
-      } else {
-        console.error(`❌ Error processing URL ${url}:`, error);
-      }
-      return [];
-    }
+    // Content is valid if it matches any of the patterns
+    return validationPatterns.some(pattern => pattern.test(content));
   }
 
-  private isValidHelpContent(content: string): boolean {
-    // Minimum content length
-    if (content.length < 100) return false;
+  private isValidHelpCenterUrl(url: string, competitor: string): boolean {
+    const lowercaseUrl = url.toLowerCase();
+    
+    // Quick reject for invalid URLs
+    if (url.length < 10 || !url.startsWith('http')) return false;
+    
+    // Reject low-quality and non-official domains
+    const invalidDomains = [
+      'pissedconsumer.com',
+      'complaintsboard.com',
+      'trustpilot.com',
+      'reddit.com',
+      'facebook.com',
+      'twitter.com',
+      'linkedin.com',
+      'medium.com',
+      'blogspot.com',
+      'wordpress.com'
+    ];
+    if (invalidDomains.some(domain => lowercaseUrl.includes(domain))) return false;
 
-    // Check for script-like content
-    if (content.includes('function(') || content.includes('=>')) return false;
+    // Reject common non-content pages
+    const invalidPatterns = [
+      '/error', '/login', '/404', 'cloudflare', '/cart',
+      '/search', '/index', '/sitemap'
+    ];
+    if (invalidPatterns.some(pattern => lowercaseUrl.includes(pattern))) return false;
 
-    // Check for common help content indicators
-    const helpTerms = ['how to', 'guide', 'steps', 'instructions', 'help', 'support'];
-    return helpTerms.some(term => content.toLowerCase().includes(term));
+    // Must contain help-related paths
+    const helpPatterns = ['/help', '/support', '/faq', '/customer-service', '/care', '/contact'];
+    const hasHelpPattern = helpPatterns.some(pattern => lowercaseUrl.includes(pattern));
+
+    // Verify it's likely an official domain
+    const officialDomainPattern = new RegExp(`^https?://([\\w-]+\\.)?${competitor.replace(/\s+/g, '')}\\.[a-z]+`);
+    const isOfficialDomain = officialDomainPattern.test(lowercaseUrl);
+
+    // Must be official domain and contain help pattern
+    return isOfficialDomain && hasHelpPattern;
   }
 
-  private async searchHelpCenterArticles(topic: string, organizationId: string): Promise<string[]> {
+  private async searchHelpCenterArticles(topic: string, organizationId: string): Promise<{
+    urls: string[];
+    competitors: string[];
+  }> {
     try {
       const { data: orgData } = await this.supabase
         .from('organizations')
@@ -247,79 +234,77 @@ export class LangchainService {
 
       console.log('🎯 Identified competitors:', competitors);
 
-      // Improved search for competitor help center content
-      const competitorSearchPromises = competitors.map(competitor => 
-        this.tavilyClient.search(
-          `${competitor} ${topic} official site customer service guide`, {
-            searchDepth: "advanced",
-            maxResults: 2,
-            filterWebResults: true,
-            // Focus on high-quality help content
-            searchType: "news",
-            excludeDomains: [
-              'cloudflare.com',
-              'facebook.com',
-              'twitter.com',
-              'linkedin.com'
-            ],
-            // Ensure we get recent content
-            endDate: new Date().toISOString(),
-            startDate: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString() // Last year
-          }
-        )
-      );
-
-      const competitorResults = await Promise.all(competitorSearchPromises);
-      const allResults = competitorResults
-        .flatMap(result => result.results)
-        .slice(0, 5); // Still limit total results to 5
-
-      console.log('🔍 Initial search results:', 
-        allResults.map(r => ({
-          url: r.url,
-          competitor: competitors.find(c => r.url.toLowerCase().includes(c)) || 'unknown',
-          title: r.title
-        }))
-      );
-
-      // Enhanced URL filtering
-      const validUrls = allResults
-        .filter(result => {
-          const url = result.url.toLowerCase();
-          
-          // Exclude common error/non-content pages
-          if (url.includes('/error') || 
-              url.includes('/login') || 
-              url.includes('/404') ||
-              url.includes('cloudflare') ||
-              url.includes('/cart')) {
-            return false;
-          }
-
-          // Include only help content URLs
-          return (
-            (url.includes('/help') || 
-             url.includes('/support') || 
-             url.includes('/faq') || 
-             url.includes('/customer-service') ||
-             url.includes('/care')) &&
-            competitors.some(competitor => url.includes(competitor))
+      // Collect valid URLs using smarter search patterns
+      const validUrls: string[] = [];
+      
+      // Use parallel processing with improved search patterns
+      const searchPromises = competitors.slice(0, 2).map(async competitor => {
+        try {
+          // First attempt - direct help center search
+          const directSearch = await this.tavilyClient.search(
+            `${competitor} official website customer service ${topic}`,
+            {
+              searchDepth: "basic",
+              maxResults: 2,
+              filterWebResults: true,
+              excludeDomains: [
+                'cloudflare.com',
+                'facebook.com',
+                'twitter.com',
+                'linkedin.com',
+                'pissedconsumer.com',
+                'trustpilot.com',
+                'reddit.com'
+              ]
+            }
           );
-        })
-        .map(result => result.url)
-        .slice(0, 3);
+
+          // Filter and validate URLs
+          const urls = directSearch.results
+            .map(result => result.url)
+            .filter(url => this.isValidHelpCenterUrl(url, competitor));
+
+          if (urls.length > 0) {
+            return urls[0]; // Return the first valid URL
+          }
+
+          // Fallback - try topic-specific search if no direct help center found
+          const topicSearch = await this.tavilyClient.search(
+            `${competitor} ${topic} support guide official site`,
+            {
+              searchDepth: "basic",
+              maxResults: 1,
+              filterWebResults: true
+            }
+          );
+
+          const topicUrl = topicSearch.results[0]?.url;
+          return topicUrl && this.isValidHelpCenterUrl(topicUrl, competitor) ? topicUrl : null;
+
+        } catch (error) {
+          console.warn(`Error searching competitor ${competitor}:`, error);
+          return null;
+        }
+      });
+
+      const searchResults = await Promise.all(searchPromises);
+      validUrls.push(...searchResults.filter((url): url is string => url !== null));
 
       console.log('🔍 Filtered URLs to process:', validUrls);
-
-      // Process the URLs
-      const processedDocs = await this.processHelpCenterUrls(validUrls);
-      console.log(`📄 Processed ${processedDocs.length} documents from competitor help centers`);
-
-      return processedDocs.length > 0 ? validUrls : this.searchIndustryHelpCenters(topic);
+      const urls = validUrls.length > 0 ? validUrls.slice(0, 2) : await this.searchIndustryHelpCenters(topic);
+      
+      return {
+        urls,
+        competitors
+      };
 
     } catch (error) {
       console.error('Error searching help centers:', error);
-      return this.searchIndustryHelpCenters(topic);
+      const fallbackUrls = await this.searchIndustryHelpCenters(topic);
+      return {
+        urls: fallbackUrls,
+        competitors: []
+      };
     }
   }
 
@@ -334,48 +319,148 @@ export class LangchainService {
   }
 
   private async processHelpCenterUrls(urls: string[]): Promise<Document[]> {
-    // Process URLs in parallel
-    const results = await Promise.allSettled(
-      urls.map(url => this.scrapeAndProcessUrl(url))
-    );
-    
-    // Filter out failed attempts and flatten results
-    const successfulDocs = results
-      .filter((result): result is PromiseFulfilledResult<Document[]> => 
-        result.status === 'fulfilled' && result.value.length > 0
-      )
-      .map(result => result.value)
-      .flat()
-      .slice(0, 3); // Still limit to 3 documents
+    const documents: Document[] = [];
+    let validDocCount = 0;
 
-    console.log(`📊 Successfully processed ${successfulDocs.length} documents from ${results.length} URLs`);
-    return successfulDocs;
+    // Process URLs concurrently with early termination
+    await Promise.all(
+      urls.map(async (url) => {
+        try {
+          // Skip if we already have enough valid documents
+          if (validDocCount >= 2) return;
+
+          const docs = await this.scrapeAndProcessUrl(url);
+          
+          // Process each document as it arrives
+          for (const doc of docs) {
+            if (this.isValidHelpContent(doc.pageContent)) {
+              documents.push(doc);
+              validDocCount++;
+              
+              // Early termination if we have enough valid documents
+              if (validDocCount >= 2) break;
+            }
+          }
+        } catch (error) {
+          console.warn(`Error processing URL ${url}:`, error);
+        }
+      })
+    );
+
+    console.log(`📊 Successfully processed ${documents.length} documents`);
+    return documents;
   }
 
+  // Add new method for direct API access
+  private async getHelpCenterContent(competitor: string, topic: string): Promise<string | null> {
+    // Common help center API endpoints
+    const apiEndpoints = [
+      `/api/v2/help_center/articles/search?query=${encodeURIComponent(topic)}`,
+      `/api/v2/help_center/en-us/articles.json`,
+      `/api/content/articles?query=${encodeURIComponent(topic)}`
+    ];
+
+    for (const endpoint of apiEndpoints) {
+      try {
+        const response = await fetch(`https://${competitor}.zendesk.com${endpoint}`, {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (compatible; HelpCenterBot/1.0)'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.articles?.[0]?.body) {
+            return data.articles[0].body;
+          }
+        }
+      } catch (error) {
+        console.warn(`API attempt failed for ${competitor}:`, error);
+      }
+    }
+    return null;
+  }
+
+  // Add new method for alternative content fetching
+  private async getAlternativeContent(topic: string): Promise<string | null> {
+    try {
+      // Try searching in known luxury retail knowledge bases
+      const searchResult = await this.tavilyClient.search(
+        `${topic} luxury retail customer service best practices site:knowledge.hubspot.com OR site:zendesk.com/blog OR site:intercom.com/blog`,
+        {
+          searchDepth: "basic",
+          maxResults: 2
+        }
+      );
+
+      if (searchResult.results.length > 0) {
+        // Get the content directly from the API response
+        const content = searchResult.results
+          .map(r => r.content)
+          .join('\n\n');
+        
+        return content.length > 100 ? content : null;
+      }
+    } catch (error) {
+      console.warn('Alternative content fetch failed:', error);
+    }
+    return null;
+  }
+
+  // Update learnFromHelpCenters to use new methods
   async learnFromHelpCenters(topic: string, organizationId: string): Promise<string> {
     try {
       console.log('\n🔍 Learning from help centers about:', topic);
-      const urls = await this.searchHelpCenterArticles(topic, organizationId);
       
-      const docs = await this.processHelpCenterUrls(urls);
-      console.log(`📄 Processed ${docs.length} documents`);
+      // Get URLs and competitors together
+      const { urls, competitors } = await this.searchHelpCenterArticles(topic, organizationId);
+      
+      let accumulatedContent = '';
+      const contentLimit = 4000;
 
-      // Optimize: Reduce content length sent to OpenAI
-      const limitedContent = docs
-        .map(d => d.pageContent)
-        .join('\n\n')
-        .slice(0, 4000); // Reduced from 6000 to 4000 characters
+      // Try direct API access first
+      if (competitors && competitors.length > 0) {
+        for (const competitor of competitors.slice(0, 2)) {
+          const apiContent = await this.getHelpCenterContent(competitor, topic);
+          if (apiContent) {
+            accumulatedContent += apiContent + '\n\n';
+            if (accumulatedContent.length >= contentLimit * 0.8) break;
+          }
+        }
+      }
 
-      const analysis = await this.model.invoke(
+      // If API access didn't yield enough content, try alternative sources
+      if (accumulatedContent.length < contentLimit * 0.5) {
+        const alternativeContent = await this.getAlternativeContent(topic);
+        if (alternativeContent) {
+          accumulatedContent += alternativeContent;
+        }
+      }
+
+      // Fallback to existing scraping method if needed
+      if (accumulatedContent.length < contentLimit * 0.3) {
+        const scrapedContent = await this.processHelpCenterUrls(urls);
+        accumulatedContent += scrapedContent
+          .map(doc => doc.pageContent)
+          .join('\n\n');
+      }
+
+      console.log(`📄 Processed content length: ${accumulatedContent.length} characters`);
+
+      // Generate analysis with whatever content we have
+      const analysis = await this.streamOpenAIResponse(
         `Analyze these help center articles briefly:
          1. Key points about ${topic}
          2. Best practices
          
-         Articles: ${limitedContent}`
+         Articles: ${accumulatedContent || 'No specific articles found. Provide general luxury retail best practices.'}`,
+        (chunk) => {
+          // Progress handling
+        }
       );
-      console.log('Analysis:', analysis.content);
 
-      return analysis.content;
+      return analysis;
     } catch (error) {
       console.error('Error learning from help centers:', error);
       throw error;
@@ -407,7 +492,6 @@ export class LangchainService {
   }): Promise<string> {
     let parentRun;
     try {
-      // Create parent run for article generation
       parentRun = await this.client.createRun({
         name: "Article Generation",
         run_type: "chain",
@@ -420,34 +504,28 @@ export class LangchainService {
 
       const { title, description, organizationId } = params;
 
-      // Get organization name for brand voice
-      const { data: orgData } = await this.supabase
-        .from('organizations')
-        .select('name')
-        .eq('id', organizationId)
-        .single();
+      // Run competitor research and org data fetch concurrently
+      const [competitorResearchRun, { data: orgData }] = await Promise.all([
+        this.client.createRun({
+          name: "Competitor Research",
+          run_type: "chain",
+          project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
+          parent_run_id: parentRun?.id,
+          inputs: { title, organizationId }
+        }),
+        this.supabase
+          .from('organizations')
+          .select('name')
+          .eq('id', organizationId)
+          .single()
+      ]);
 
       const brandName = orgData?.name || 'Our';
 
-      // Create child run for competitor research
-      const competitorResearchRun = await this.client.createRun({
-        name: "Competitor Research",
-        run_type: "chain",
-        project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
-        parent_run_id: parentRun?.id,
-        inputs: { title, organizationId }
-      });
+      // Start competitor research early
+      const competitorInsightsPromise = this.learnFromHelpCenters(title, organizationId);
 
-      const competitorInsights = await this.learnFromHelpCenters(title, organizationId);
-
-      if (competitorResearchRun) {
-        await competitorResearchRun.end({
-          outputs: { competitorInsights }
-        });
-        await competitorResearchRun.patchRun();
-      }
-
-      // Create child run for article generation
+      // Create article generation run while competitor research is in progress
       const articleGenRun = await this.client.createRun({
         name: "Generate Article Content",
         run_type: "llm",
@@ -456,12 +534,22 @@ export class LangchainService {
         inputs: {
           title,
           description,
-          competitorInsights,
           brandName
         }
       });
 
-      const response = await this.model.invoke(
+      // Wait for competitor insights
+      const competitorInsights = await competitorInsightsPromise;
+
+      if (competitorResearchRun) {
+        await competitorResearchRun.end({
+          outputs: { competitorInsights }
+        });
+        await competitorResearchRun.patchRun();
+      }
+
+      let accumulatedContent = '';
+      const content = await this.streamOpenAIResponse(
         `You are writing a help center article as ${brandName}'s official customer service representative.
 
          TOPIC: ${title}
@@ -483,32 +571,33 @@ export class LangchainService {
          EXAMPLE FORMAT:
          For CHANEL repair services, we recommend visiting your nearest CHANEL Boutique where an advisor can assist you.
          
-         Contact our Client Care Advisors online or by telephone at 1.800.550.0005, available 7 AM to 12 AM ET.
-
-         Write a concise, sophisticated response in our brand voice without quotation marks.`
+         Write a concise, sophisticated response in our brand voice without quotation marks.`,
+        (chunk) => {
+          accumulatedContent += chunk;
+          // Could emit progress events here if needed
+        }
       );
 
-      const content = response.content.toString().replace(/['"]/g, '');
+      const cleanedContent = content.replace(/['"]/g, '');
 
       if (articleGenRun) {
         await articleGenRun.end({
-          outputs: { content }
+          outputs: { content: cleanedContent }
         });
         await articleGenRun.patchRun();
       }
 
       if (parentRun) {
         await parentRun.end({
-          outputs: { content }
+          outputs: { content: cleanedContent }
         });
         await parentRun.patchRun(false);
       }
 
-      return content;
+      return cleanedContent;
 
     } catch (error) {
       console.error('Error in article generation:', error);
-      // End the parent run with error if it exists
       if (parentRun) {
         await parentRun.end({
           error: error instanceof Error ? error.message : "Unknown error"
@@ -743,6 +832,132 @@ export class LangchainService {
     } catch (error) {
       console.error('Error generating chat response:', error);
       throw error;
+    }
+  }
+
+  // Add this new method for streaming responses
+  private async streamOpenAIResponse(
+    prompt: string,
+    onProgress?: (chunk: string) => void
+  ): Promise<string> {
+    const response = await this.model.invoke(prompt, {
+      callbacks: [{
+        handleLLMNewToken(token: string) {
+          onProgress?.(token);
+        },
+      }],
+      stream: true
+    });
+
+    return response.content.toString();
+  }
+
+  private async scrapeAndProcessUrl(url: string): Promise<Document[]> {
+    try {
+      console.log(`📄 Processing URL: ${url}`);
+      
+      // Add headers and options for better site access
+      const loader = new CheerioWebBaseLoader(url, {
+        selector: `
+          main,
+          article, 
+          .help-article, 
+          .article-content, 
+          .content,
+          .main-content,
+          [class*="help"], 
+          [class*="support"],
+          [class*="article"],
+          [class*="content"],
+          [id*="content"],
+          [id*="main"]
+        `.trim(),
+        scriptSelectors: [
+          'script',
+          'style',
+          'header:not(.article-header)',
+          'footer',
+          'nav',
+          '.cookie-banner',
+          '.navigation',
+          '.menu',
+          '.sidebar',
+          '.ads',
+          'iframe'
+        ],
+        // Add headers for better site access
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1'
+        }
+      });
+
+      const docs = await this.withTimeout(
+        loader.load(),
+        15000,
+        `Loading content from ${url}`
+      );
+
+      // Early validation with more detailed logging
+      if (!docs || docs.length === 0) {
+        console.log(`⚠️ No initial content found in: ${url}`);
+        return [];
+      }
+
+      console.log(`📝 Found ${docs.length} potential content sections in: ${url}`);
+
+      // Clean and validate content with better logging
+      const validDocs = docs.map((doc, index) => {
+        try {
+          const content = doc.pageContent
+            .replace(/[\r\n]+/g, '\n')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          console.log(`📄 Content section ${index + 1} length: ${content.length} characters`);
+
+          return new Document({
+            pageContent: content,
+            metadata: { ...doc.metadata, source: url }
+          });
+        } catch (error) {
+          console.warn(`Error cleaning content section ${index + 1} from ${url}:`, error);
+          return null;
+        }
+      }).filter((doc): doc is Document => {
+        if (!doc) return false;
+        const isValid = this.isValidHelpContent(doc.pageContent);
+        if (!isValid) {
+          console.log(`❌ Content section failed validation: ${doc.pageContent.slice(0, 100)}...`);
+        }
+        return isValid;
+      });
+
+      if (validDocs.length === 0) {
+        console.log(`⚠️ No valid help content found in: ${url}`);
+        return [];
+      }
+
+      const splitter = new RecursiveCharacterTextSplitter({
+        chunkSize: 1000,
+        chunkOverlap: 100,
+        separators: ['\n\n', '\n', '. ', ' ', ''] // More granular splitting
+      });
+
+      const splitDocs = await splitter.splitDocuments(validDocs);
+      console.log(`📑 Split into ${splitDocs.length} chunks from: ${url}`);
+      return splitDocs;
+
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('timed out')) {
+        console.log(`⏱️ Skipping slow URL ${url}: ${error.message}`);
+      } else {
+        console.error(`❌ Error processing URL ${url}:`, error);
+      }
+      return [];
     }
   }
 }
