@@ -331,6 +331,7 @@ const Dashboard = () => {
           )
         `)
         .eq('organizations_id', selectedOrg)
+        .not('status', 'eq', 'AI_Chat')  // Filter out AI_Chat conversations
         .order('is_important', { ascending: false })
         .order('created_at', { ascending: false });
 
@@ -550,13 +551,16 @@ const Dashboard = () => {
           filter: `organizations_id=eq.${selectedOrg}`
         },
         (payload) => {
-          setConversations(current =>
-            current.map(conv =>
-              conv.id === payload.new.id
-                ? { ...conv, status: payload.new.status }
-                : conv
-            )
-          );
+          // Only update if the conversation is not in AI_Chat status
+          if (payload.new.status !== 'AI_Chat') {
+            setConversations(current =>
+              current.map(conv =>
+                conv.id === payload.new.id
+                  ? { ...conv, status: payload.new.status }
+                  : conv
+              )
+            );
+          }
         }
       )
       .subscribe();

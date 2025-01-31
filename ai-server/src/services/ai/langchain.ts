@@ -20,6 +20,9 @@ export class LangchainService {
   private tracer: LangChainTracer;
   private client: Client;
   private callbackManager: CallbackManager;
+  private deflectionClient: Client;
+  private deflectionTracer: LangChainTracer;
+  private deflectionCallbackManager: CallbackManager;
 
   constructor() {
     if (!config.openaiKey) {
@@ -33,19 +36,111 @@ export class LangchainService {
     // Enable background callbacks
     process.env.LANGCHAIN_CALLBACKS_BACKGROUND = 'true';
 
-    // Initialize LangSmith client
+    // Initialize Langsmith client with shared API key for article generation
     this.client = new Client({
-      apiUrl: process.env.LANGCHAIN_ENDPOINT,
       apiKey: process.env.LANGSMITH_API_KEY,
+      apiUrl: process.env.LANGCHAIN_ENDPOINT
     });
 
-    // Initialize tracer and callback manager
+    // Add debug logging for client initialization
+    console.log('Initializing deflection client with:', {
+      apiKey: process.env.LANGSMITH_PROJECT_DEFLECTION_API_KEY?.slice(0, 8) + '...',
+      endpoint: process.env.LANGCHAIN_ENDPOINT,
+      projectName: process.env.LANGSMITH_PROJECT_DEFLECTION
+    });
+
+    // Initialize separate client for chat deflection with proper error handling
+    try {
+      if (!process.env.LANGSMITH_PROJECT_DEFLECTION_API_KEY) {
+        throw new Error('Deflection API key is missing');
+      }
+
+      if (!process.env.LANGCHAIN_ENDPOINT) {
+        throw new Error('Langchain endpoint is missing');
+      }
+
+      this.deflectionClient = new Client({
+        apiKey: process.env.LANGSMITH_PROJECT_DEFLECTION_API_KEY,
+        apiUrl: process.env.LANGCHAIN_ENDPOINT
+      });
+
+      // Verify client initialization
+      if (!this.deflectionClient) {
+        throw new Error('Failed to initialize deflection client');
+      }
+
+      // Test client by creating a test run with proper error handling
+      const testRun = async () => {
+        try {
+          console.log('Creating test run with:', {
+            projectName: process.env.LANGSMITH_PROJECT_DEFLECTION,
+            apiKey: process.env.LANGSMITH_PROJECT_DEFLECTION_API_KEY?.slice(0, 8) + '...',
+            endpoint: process.env.LANGCHAIN_ENDPOINT
+          });
+
+          const response = await this.deflectionClient.createRun({
+            name: "Test Connection",
+            run_type: "chain",
+            project_name: process.env.LANGSMITH_PROJECT_DEFLECTION || 'default',
+            inputs: { test: true },
+            start_time: new Date().toISOString()  // Ensure proper date format
+          });
+
+          console.log('Create run response:', {
+            success: !!response,
+            hasId: !!response?.id,
+            type: typeof response,
+            response: response  // Log full response for debugging
+          });
+
+          if (!response) {
+            throw new Error('No response from createRun');
+          }
+
+          console.log('Deflection client connection verified:', response.id);
+          
+          // Clean up test run
+          await this.deflectionClient.updateRun(response.id, { 
+            status: 'completed',
+            end_time: new Date().toISOString()  // Ensure proper date format
+          });
+        } catch (error) {
+          console.error('Deflection client connection test failed:', error);
+          // Log more details about the error
+          if (error instanceof Error) {
+            console.error('Error details:', {
+              message: error.message,
+              stack: error.stack,
+              name: error.name
+            });
+          }
+        }
+      };
+
+      // Execute test but don't wait for it
+      testRun();
+
+    } catch (error) {
+      console.error('Error initializing deflection client:', error);
+      throw error;  // Re-throw to prevent service from starting with invalid client
+    }
+
+    // Initialize tracer for article generation
     this.callbackManager = new CallbackManager();
     this.tracer = new LangChainTracer({
-      projectName: config.langsmithProjectName
+      projectName: process.env.LANGSMITH_PROJECT_ARTICLE
     });
     this.callbackManager.addHandler(this.tracer);
 
+    // Initialize separate tracer for chat deflection
+    this.deflectionCallbackManager = new CallbackManager();
+    this.deflectionTracer = new LangChainTracer({
+      projectName: process.env.LANGSMITH_PROJECT_DEFLECTION,
+      apiKey: process.env.LANGSMITH_PROJECT_DEFLECTION_API_KEY
+    });
+    this.deflectionCallbackManager.addHandler(this.deflectionTracer);
+
+    // Add callbacks to model
     this.model = new ChatOpenAI({
       openAIApiKey: config.openaiKey,
       modelName: "gpt-4",
@@ -72,6 +167,79 @@ export class LangchainService {
     }
 
     this.tavilyClient = tavily({ apiKey: config.tavilyApiKey });
+  }
+
+  // Create a proper mock client for fallback
+  private createMockClient() {
+    return {
+      createRun: async () => ({
+        id: crypto.randomUUID(), // Generate valid UUID
+        patchRun: async () => ({}),
+        end: async () => ({})
+      }),
+      updateRun: async () => ({}),
+    } as unknown as Client;
+  }
+
+  // Helper method for run management with proper async handling
+  private async createAndTrackRun(params: {
+    name: string;
+    runType: string;
+    projectName: string;
+    inputs: Record<string, any>;
+    parentRunId?: string;
+  }) {
+    try {
+      const run = await this.client.createRun({
+        name: params.name,
+        run_type: params.runType,
+        project_name: params.projectName || 'default',
+        inputs: params.inputs,
+        parent_run_id: params.parentRunId
+      });
+
+      // Return run object with fallback methods
+      return {
+        ...run,
+        patchRun: run.patchRun || (async () => ({})),
+        end: run.end || (async () => ({}))
+      };
+    } catch (error) {
+      console.warn(`Failed to create ${params.name} run:`, error);
+      // Return a valid mock run with required methods
+      return {
+        id: crypto.randomUUID(),
+        patchRun: async () => ({}),
+        end: async () => ({})
+      };
+    }
+  }
+
+  // Helper method for updating runs with proper async handling
+  private async updateRunSafely(runId: string, params: {
+    outputs?: Record<string, any>;
+    error?: string;
+    status?: string;
+  }) {
+    try {
+      if (!this.isValidUUID(runId)) {
+        console.warn('Invalid run ID, skipping update');
+        return;
+      }
+      
+      await Promise.all([
+        this.client.updateRun(runId, params),
+        this.client.updateRun(runId, { status: params.status || 'completed' })
+      ]);
+    } catch (error) {
+      console.warn(`Failed to update run ${runId}:`, error);
+    }
+  }
+
+  // Helper to validate UUID
+  private isValidUUID(uuid: string): boolean {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(uuid);
   }
 
   private async withTimeout<T>(
@@ -768,67 +936,66 @@ export class LangchainService {
   }
 
   async generateChatResponse(question: string, articleContent: string): Promise<string> {
-    let parentRun;
     try {
-      // Create parent run for chat deflection
-      parentRun = await this.client.createRun({
+      // Create a run for tracing
+      const run = await this.deflectionClient.createRun({
         name: "Chat Deflection",
         run_type: "chain",
         project_name: process.env.LANGSMITH_PROJECT_DEFLECTION,
-        inputs: {
-          question,
-          articleContent
-        }
+        inputs: { question, articleContent },
+        start_time: new Date()
       });
 
-      console.log('Generating response for:', { question, articleContent });
-
-      let response = '';
-      
-      // Use the model directly for more reliable response
-      const result = await this.model.invoke(
-        `You are Ai Dali, a helpful but sophisticated CHANEL customer service AI. 
-         Using the provided article content, answer the customer's question in a concise, 
-         friendly, and professional manner. Keep your response brief (2-3 sentences max) 
-         while maintaining CHANEL's elegant tone.
-
-         Customer Question: ${question}
-         
-         Article Content: ${articleContent}
-         
-         Instructions:
-         - Be concise and friendly
-         - Use "we" when referring to CHANEL
-         - Focus on the most relevant information
-         - Maintain a sophisticated tone
-         - Keep response to 2-3 sentences maximum
-         - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent`
+      // More specific check for conversation ending
+      const isClosingMessage = question.toLowerCase().match(
+        /(?:no(?:pe)?|that'?s? (?:all|it)|i'?m (?:good|fine|done)|nothing else|thank(?:s| you)|bye|good(?:bye)?)\b/
       );
 
-      response = result.content.toString();
-      console.log('Generated response:', response);
+      // Generate response using existing logic
+      const result = await this.model.invoke(
+        `You are Ai Dali, a helpful but sophisticated CHANEL customer service AI. 
+         ${isClosingMessage ? 'The customer appears to be ending the conversation. Respond with a polite farewell.' : 
+         `Using the provided article content, answer the customer's question in a concise, 
+          friendly, and professional manner. Keep your response brief (2-3 sentences max) 
+          while maintaining CHANEL's elegant tone.
 
-      // End parent run
-      if (parentRun) {
-        await parentRun.end({
+          Customer Question: ${question}
+          Article Content: ${articleContent}
+          
+          Instructions:
+          - Be concise and friendly
+          - Use "we" when referring to CHANEL
+          - Focus on the most relevant information
+          - Maintain a sophisticated tone
+          - Keep response to 2-3 sentences maximum
+          - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent
+          - After answering, ask if there's anything else they need help with today`}`,
+        {
+          callbacks: this.deflectionCallbackManager
+        }
+      );
+
+      const response = result.content.toString();
+
+      // Complete the run with appropriate status
+      if (run?.id) {
+        await this.deflectionClient.updateRun(run.id, {
+          end_time: new Date(),
           outputs: { 
-            finalResponse: response,
-            questionAnswered: true
-          }
+            response,
+            articleLength: articleContent.length,
+            responseLength: response.length,
+            isClosingMessage,
+            conversationStatus: isClosingMessage ? 'completed' : 'in_progress'
+          },
+          status: isClosingMessage ? 'completed' : 'in_progress'  // Explicitly end the run when customer is done
         });
-        await parentRun.patchRun(false);
       }
 
       return response;
 
     } catch (error) {
-      console.error('Error generating chat response:', error);
-      if (parentRun) {
-        await parentRun.end({
-          error: error instanceof Error ? error.message : "Unknown error"
-        });
-        await parentRun.patchRun(false);
-      }
+      console.error('Error in generateChatResponse:', error);
       throw error;
     }
   }

@@ -171,4 +171,15 @@ router.post('/generate-response', async (req, res) => {
   }
 });
 
+router.post('/chat-deflection', async (req, res) => {
+  try {
+    const { question, articleContent } = req.body;
+    const response = await langchainService.generateChatResponse(question, articleContent);
+    res.json({ response });
+  } catch (error) {
+    console.error('Error generating response:', error);
+    res.status(400).json({ error: 'AI response generation failed' });
+  }
+});
+
 export const aiRoutes = router;
