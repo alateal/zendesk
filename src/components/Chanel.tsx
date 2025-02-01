@@ -46,6 +46,22 @@ interface Conversation {
   created_at: string;
 }
 
+// Add this function near the top of the file, after the type definitions
+const getStatusMessage = (status: ConversationStatus): string => {
+  switch (status) {
+    case 'AI_Chat':
+      return 'Chat started with Ai Dali';
+    case 'Pending_Handoff':
+      return 'Connecting to a CHANEL Client Care Advisor...';
+    case 'Active':
+      return 'A CHANEL Client Care Advisor has joined the chat';
+    case 'Closed':
+      return 'Chat session ended';
+    default:
+      return '';
+  }
+};
+
 const Chanel = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -405,16 +421,26 @@ const Chanel = () => {
       setIsSubmittingRating(true);
 
       if (conversationId) {
-        const updates: ConversationUpdate = {
-          status: 'Closed',
-          closed_at: new Date().toISOString()
-        };
+        // Check current conversation status
+        const { data: currentConv } = await supabase
+          .from('conversations')
+          .select('status')
+          .eq('id', conversationId)
+          .single();
 
-        if (!skip && rating > 0) {
-          updates.satisfaction_score = rating.toString();
+        // Only update if not already closed
+        if (currentConv && currentConv.status !== 'Closed') {
+          const updates: ConversationUpdate = {
+            status: 'Closed'
+          };
+
+          // Only add satisfaction score if rating was provided
+          if (!skip && rating > 0) {
+            updates.satisfaction_score = rating.toString();
+          }
+
+          await handleConversationUpdate(conversationId, updates);
         }
-
-        await handleConversationUpdate(conversationId, updates);
       }
 
       // Clear local storage and reset states
