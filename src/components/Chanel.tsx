@@ -212,10 +212,24 @@ const Chanel = () => {
     
     try {
       setIsHandingOff(true);
+
+      // Update conversation status to Pending_Handoff
       await handleConversationUpdate(conversationId, {
         status: 'Pending_Handoff',
         is_assigned: false
       });
+
+      // Add system message
+      await supabase.from('messages').insert([{
+        content: 'Connecting you to a CHANEL Client Care Advisor...',
+        conversations_id: conversationId,
+        organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+        sender_id: 'system',
+        sender_type: 'system'
+      }]);
+
+      setConversationStatus('Pending_Handoff');
+
     } catch (error) {
       console.error('Error in human handoff:', error);
       alert('Unable to connect to a human agent at this time.');
@@ -271,7 +285,36 @@ const Chanel = () => {
       setIsAiTyping(true);
 
       try {
-        // Get AI response
+        // Check for thank you message first
+        const thankYouResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/chat-deflection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: message,
+            articleContent: ''  // Empty for thank you check
+          })
+        });
+
+        if (!thankYouResponse.ok) {
+          throw new Error(`Thank you check failed: ${thankYouResponse.statusText}`);
+        }
+
+        const { response: aiResponse } = await thankYouResponse.json();
+
+        // If it's a thank you message, store the farewell and return
+        if (aiResponse === "Thank you for contacting us. Hope you have a nice day!") {
+          await supabase.from('messages').insert([{
+            content: aiResponse,
+            conversations_id: currentConversationId,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            sender_id: 'ai-agent',
+            sender_type: 'agent'
+          }]);
+          setIsAiTyping(false);  // Stop typing indicator
+          return;
+        }
+
+        // If not a thank you message, proceed with article search
         const similarResponse = await fetch(`${import.meta.env.VITE_API_URL}/ai/search-similar`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -286,12 +329,12 @@ const Chanel = () => {
         }
 
         const similarData = await similarResponse.json();
-        let aiResponse;
+        let aiResponseData;
 
         if (similarData.articles && similarData.articles.length > 0) {
           setFailedAttempts(0);
           
-          const aiResponseData = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-response`, {
+          aiResponseData = await fetch(`${import.meta.env.VITE_API_URL}/ai/generate-response`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -305,53 +348,51 @@ const Chanel = () => {
           }
 
           const responseJson = await aiResponseData.json();
-          aiResponse = responseJson.response;
+          aiResponseData = responseJson.response;
         } else {
-          const newFailedAttempts = failedAttempts + 1;
-          setFailedAttempts(newFailedAttempts);
-
-          if (newFailedAttempts >= 3) {
-            aiResponse = "I notice I haven't been able to fully address your questions. Let me connect you with a CHANEL Client Care Advisor who can better assist you.";
-          } else {
-            aiResponse = "I apologize, but I don't have specific information about that. Would you like me to connect you with a CHANEL Client Care Advisor who can better assist you?";
-          }
-        }
-
-        // Store AI response
-        if (aiResponse) {
+          // No articles found - deflect to human agent
+          aiResponseData = "I apologize, but I don't have enough information to help with your specific query. Would you like to connect with a CHANEL Client Care Advisor? Click the button below to connect.";
+          
+          // Store AI response with button
           await supabase.from('messages').insert([{
-            content: aiResponse,
+            content: aiResponseData,
             conversations_id: currentConversationId,
             organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
             sender_id: 'ai-agent',
             sender_type: 'agent'
           }]);
+
+          // Add system message with connect button
+          await supabase.from('messages').insert([{
+            content: 'CONNECT_TO_AGENT_BUTTON',  // Special content to render as button
+            conversations_id: currentConversationId,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            sender_id: 'system',
+            sender_type: 'system'
+          }]);
+
+          setIsAiTyping(false);
+          return;  // Return early since we've already stored the messages
         }
 
-      } catch (aiError) {
-        console.error('AI Service Error:', aiError);
-        // Send a fallback message if AI service fails
-        await supabase.from('messages').insert([{
-          content: "I apologize, but I'm having trouble processing your request at the moment. Would you like to connect with a human agent who can assist you?",
-          conversations_id: currentConversationId,
-          organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-          sender_id: 'ai-agent',
-          sender_type: 'agent'
-        }]);
-      } finally {
-        setIsAiTyping(false);
-      }
+        // Store AI response
+        if (aiResponseData) {
+          await supabase.from('messages').insert([{
+            content: aiResponseData,
+            conversations_id: currentConversationId,
+            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+            sender_id: 'ai-agent',
+            sender_type: 'agent'
+          }]);
+          setIsAiTyping(false);  // Stop typing indicator after response is stored
+        }
 
-      if (failedAttempts >= 2) {
-        setTimeout(() => {
-          handleHumanHandoff();
-        }, 1000);
+      } catch (error) {
+        console.error('Error:', error);
+        setIsAiTyping(false);  // Stop typing indicator on error
       }
-
     } catch (error) {
-      console.error('Error sending message:', error);
-      setIsAiTyping(false);
-      alert('Error sending message. Please try again.');
+      // ... rest of your error handling
     }
   };
 
@@ -550,13 +591,13 @@ const Chanel = () => {
 
   // Add typing indicator component
   const TypingIndicator = () => (
-    <div className="flex items-center space-x-2 p-3 bg-white border border-black rounded-lg">
+    <div className="flex items-center space-x-2 p-4 bg-white border border-black rounded-lg">
       <div className="flex space-x-1">
         <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
         <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
         <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
       </div>
-      <span className="text-sm text-gray-500">Ai Dali is typing...</span>
+      <span className="text-base text-gray-500">Ai Dali is typing...</span>
     </div>
   );
 
@@ -683,42 +724,30 @@ const Chanel = () => {
                   )}
 
                   {/* Messages with handoff button */}
-                  {messages.map((msg, index) => (
-                    <div key={`${msg.id}-${index}`}>
-                      <div className={`mb-2 ${
-                        msg.sender_type === 'customer' ? 'ml-auto' : 'mr-auto'
-                      } max-w-[80%]`}>
-                        <div className={`rounded-lg p-3 ${
-                          msg.sender_type === 'customer'
-                            ? 'bg-black text-[#FFFFF0] ml-auto'
-                            : msg.sender_type === 'system'
-                            ? 'bg-gray-100 border border-gray-300'
-                            : 'bg-white border border-black'
-                        }`}>
-                          <p>{msg.content}</p>
-                          {msg.sender_type === 'agent' && 
-                           msg.content.includes("Would you like me to connect you with a CHANEL Client Care Advisor") && 
-                           conversationStatus === 'Active' && (
-                            <button
-                              onClick={handleHumanHandoff}
-                              disabled={isHandingOff}
-                              className="mt-2 text-sm px-3 py-1 bg-black text-[#FFFFF0] rounded hover:bg-neutral-800 transition-colors disabled:opacity-50"
-                            >
-                              {isHandingOff ? 'Connecting...' : 'Connect to Human Agent'}
-                            </button>
-                          )}
-                        </div>
-                        <div className={`text-xs mt-1 text-gray-500 ${
-                          msg.sender_type === 'customer' ? 'text-right' : 'text-left'
-                        }`}>
-                          {new Date(msg.created_at).toLocaleTimeString()}
-                        </div>
+                  {messages.map((msg) => (
+                    <div key={msg.id} className={`flex ${msg.sender_type === 'customer' ? 'justify-end' : 'justify-start'} mb-4`}>
+                      <div className={`max-w-[80%] p-4 rounded-lg ${
+                        msg.sender_type === 'customer' ? 'bg-black text-[#FFFFF0]' : 'bg-white border border-black'
+                      }`}>
+                        {msg.content === 'CONNECT_TO_AGENT_BUTTON' ? (
+                          <button
+                            onClick={handleHumanHandoff}
+                            disabled={isHandingOff}
+                            className="bg-black text-[#FFFFF0] px-4 py-2 rounded hover:bg-neutral-800 transition-colors disabled:opacity-50 text-base"
+                          >
+                            {isHandingOff ? 'Connecting...' : 'Connect to Agent'}
+                          </button>
+                        ) : (
+                          <p className="text-base leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                        )}
                       </div>
                     </div>
                   ))}
                   {isAiTyping && (
-                    <div className="mr-auto max-w-[80%] mb-2">
-                      <TypingIndicator />
+                    <div className="flex justify-start mb-4">
+                      <div className="mr-auto max-w-[80%]">
+                        <TypingIndicator />
+                      </div>
                     </div>
                   )}
                   <div ref={messagesEndRef} />
@@ -738,13 +767,13 @@ const Chanel = () => {
                         }
                       }}
                       placeholder="Type your message..."
-                      className="flex-1 px-3 py-2 rounded border border-black focus:outline-none focus:ring-2 focus:ring-black bg-[#FFFFF0]"
+                      className="flex-1 px-4 py-3 text-base rounded border border-black focus:outline-none focus:ring-2 focus:ring-black bg-[#FFFFF0]"
                     />
                     <button
-                      onClick={handleSendMessage}
-                      className="bg-black text-[#FFFFF0] p-2 rounded hover:bg-neutral-800 transition-colors"
+                      onClick={() => handleSendMessage()}
+                      className="bg-black text-[#FFFFF0] p-3 rounded hover:bg-neutral-800 transition-colors"
                     >
-                      <IconSend size={20} />
+                      <IconSend size={24} />
                     </button>
                   </div>
                 </div>

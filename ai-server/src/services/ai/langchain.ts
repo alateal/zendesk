@@ -118,7 +118,7 @@ export class LangchainService {
       };
 
       // Execute test but don't wait for it
-      testRun();
+      // testRun();
 
     } catch (error) {
       console.error('Error initializing deflection client:', error);
@@ -413,12 +413,12 @@ export class LangchainService {
             `${competitor} official website customer service ${topic}`,
             {
               searchDepth: "basic",
-              maxResults: 2,
-              filterWebResults: true,
-              excludeDomains: [
-                'cloudflare.com',
-                'facebook.com',
-                'twitter.com',
+            maxResults: 2,
+            filterWebResults: true,
+            excludeDomains: [
+              'cloudflare.com',
+              'facebook.com',
+              'twitter.com',
                 'linkedin.com',
                 'pissedconsumer.com',
                 'trustpilot.com',
@@ -675,11 +675,11 @@ export class LangchainService {
       // Run competitor research and org data fetch concurrently
       const [competitorResearchRun, { data: orgData }] = await Promise.all([
         this.client.createRun({
-          name: "Competitor Research",
-          run_type: "chain",
-          project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
-          parent_run_id: parentRun?.id,
-          inputs: { title, organizationId }
+        name: "Competitor Research",
+        run_type: "chain",
+        project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
+        parent_run_id: parentRun?.id,
+        inputs: { title, organizationId }
         }),
         this.supabase
           .from('organizations')
@@ -917,7 +917,7 @@ export class LangchainService {
             ...result,
             similarity: combinedScore
           };
-        } catch (error) {
+    } catch (error) {
           console.warn('Error reranking result:', error);
           return result;
         }
@@ -937,7 +937,6 @@ export class LangchainService {
 
   async generateChatResponse(question: string, articleContent: string): Promise<string> {
     try {
-      // Create a run for tracing
       const run = await this.deflectionClient.createRun({
         name: "Chat Deflection",
         run_type: "chain",
@@ -946,30 +945,68 @@ export class LangchainService {
         start_time: new Date()
       });
 
-      // More specific check for conversation ending
-      const isClosingMessage = question.toLowerCase().match(
-        /(?:no(?:pe)?|that'?s? (?:all|it)|i'?m (?:good|fine|done)|nothing else|thank(?:s| you)|bye|good(?:bye)?)\b/
+      // Simplify thank you detection with exact phrases
+      const thankYouPhrases = [
+        'thank you', 'thanks', 'thx',
+        'no thank you', 'no thanks',
+        'that\'s all', 'that is all',
+        'i\'m good', 'im good',
+        'i\'m ok', 'im ok',
+        'goodbye', 'bye'
+      ];
+
+      const normalizedQuestion = question.toLowerCase().trim();
+      const isThankYouMessage = thankYouPhrases.some(phrase => 
+        normalizedQuestion.includes(phrase)
       );
 
-      // Generate response using existing logic
+      // Log the check
+      console.log('Thank you check:', {
+        question: normalizedQuestion,
+        isThankYouMessage,
+        matchedPhrase: thankYouPhrases.find(phrase => 
+          normalizedQuestion.includes(phrase)
+        )
+      });
+
+      // For thank you messages, return farewell
+      if (isThankYouMessage) {
+        const farewell = "Thank you for contacting us. Hope you have a nice day!";
+        
+        // Complete the run for thank you message
+        if (run?.id) {
+          await this.deflectionClient.updateRun(run.id, {
+            end_time: new Date(),
+            outputs: { 
+              response: farewell,
+              isThankYouMessage: true,
+              conversationStatus: 'completed'
+            },
+            status: 'completed'
+          });
+        }
+        
+        return farewell;
+      }
+
+      // Generate normal response
       const result = await this.model.invoke(
         `You are Ai Dali, a helpful but sophisticated CHANEL customer service AI. 
-         ${isClosingMessage ? 'The customer appears to be ending the conversation. Respond with a polite farewell.' : 
-         `Using the provided article content, answer the customer's question in a concise, 
-          friendly, and professional manner. Keep your response brief (2-3 sentences max) 
-          while maintaining CHANEL's elegant tone.
+         Using the provided article content, answer the customer's question in a concise, 
+         friendly, and professional manner. Keep your response brief (2-3 sentences max) 
+         while maintaining an elegant tone.
 
-          Customer Question: ${question}
-          Article Content: ${articleContent}
-          
-          Instructions:
-          - Be concise and friendly
-          - Use "we" when referring to CHANEL
-          - Focus on the most relevant information
-          - Maintain a sophisticated tone
-          - Keep response to 2-3 sentences maximum
-          - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent
-          - After answering, ask if there's anything else they need help with today`}`,
+         Customer Question: ${question}
+         Article Content: ${articleContent}
+         
+         Instructions:
+         - Be concise and friendly
+         - Use "we" when referring to CHANEL
+         - Focus on the most relevant information
+         - Maintain a sophisticated tone
+         - Keep response to 2-3 sentences maximum
+         - If customer wants to talk to human Agent, try to help customer one more time before deflecting to human Agent
+         - After answering, ask if there's anything else they need help with today`,
         {
           callbacks: this.deflectionCallbackManager
         }
@@ -977,7 +1014,7 @@ export class LangchainService {
 
       const response = result.content.toString();
 
-      // Complete the run with appropriate status
+      // Complete the run for normal response
       if (run?.id) {
         await this.deflectionClient.updateRun(run.id, {
           end_time: new Date(),
@@ -985,10 +1022,10 @@ export class LangchainService {
             response,
             articleLength: articleContent.length,
             responseLength: response.length,
-            isClosingMessage,
-            conversationStatus: isClosingMessage ? 'completed' : 'in_progress'
+            isThankYouMessage: false,
+            conversationStatus: 'in_progress'
           },
-          status: isClosingMessage ? 'completed' : 'in_progress'  // Explicitly end the run when customer is done
+          status: 'in_progress'
         });
       }
 

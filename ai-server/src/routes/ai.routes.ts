@@ -174,7 +174,13 @@ router.post('/generate-response', async (req, res) => {
 router.post('/chat-deflection', async (req, res) => {
   try {
     const { question, articleContent } = req.body;
-    const response = await langchainService.generateChatResponse(question, articleContent);
+    
+    // Always generate a response, even if no articles found
+    const response = await langchainService.generateChatResponse(
+      question, 
+      articleContent || 'No specific article found for this query.'
+    );
+    
     res.json({ response });
   } catch (error) {
     console.error('Error generating response:', error);
