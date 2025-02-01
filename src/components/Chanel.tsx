@@ -364,7 +364,19 @@ const Chanel = () => {
           }
 
           const responseJson = await aiResponseData.json();
-          aiResponseData = responseJson.response;
+          const aiResponse = responseJson.response;
+
+          // Store AI response
+          if (aiResponse) {
+            await supabase.from('messages').insert([{
+              content: aiResponse,
+              conversations_id: currentConversationId,
+              organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
+              sender_id: 'ai-agent',
+              sender_type: 'agent'
+            }]);
+            setIsAiTyping(false);  // Stop typing indicator after response is stored
+          }
         } else {
           // No articles found - deflect to human agent
           aiResponseData = "I apologize, but I don't have enough information to help with your specific query. Would you like to connect with a CHANEL Client Care Advisor? Click the button below to connect.";
@@ -389,18 +401,6 @@ const Chanel = () => {
 
           setIsAiTyping(false);
           return;  // Return early since we've already stored the messages
-        }
-
-        // Store AI response
-        if (aiResponseData) {
-          await supabase.from('messages').insert([{
-            content: aiResponseData,
-            conversations_id: currentConversationId,
-            organizations_id: '645d0512-984f-4a3a-b625-5b429b24291e',
-            sender_id: 'ai-agent',
-            sender_type: 'agent'
-          }]);
-          setIsAiTyping(false);  // Stop typing indicator after response is stored
         }
 
       } catch (error) {
@@ -481,7 +481,10 @@ const Chanel = () => {
 
       if (data) {
         setMessages(prevMessages => {
+          // Get the greeting message if it exists
           const greetingMessage = prevMessages.find(m => m.id === 'greeting');
+          
+          // Convert database messages to our Message type
           const newMessages = data.map(msg => ({
             id: msg.id,
             content: msg.content,
@@ -489,15 +492,16 @@ const Chanel = () => {
             sender_type: msg.sender_type as MessageType,
             is_typing: false
           }));
-          
-          // Filter out any duplicates by id
-          const uniqueMessages = newMessages.filter(
-            msg => !prevMessages.some(prevMsg => prevMsg.id === msg.id)
+
+          // Combine messages in the correct order
+          const allMessages = greetingMessage 
+            ? [greetingMessage, ...newMessages]
+            : newMessages;
+
+          // Remove any duplicates while preserving order
+          return allMessages.filter((msg, index, self) =>
+            index === self.findIndex((m) => m.id === msg.id)
           );
-          
-          return greetingMessage 
-            ? [greetingMessage, ...uniqueMessages]
-            : uniqueMessages;
         });
       }
     };
@@ -516,30 +520,36 @@ const Chanel = () => {
           filter: `conversations_id=eq.${conversationId}`
         },
         (payload) => {
-          // Only add new messages that aren't from the current user's session
-          if (!payload.new.id.toString().startsWith('local-')) {
-            setMessages(prevMessages => {
-              // Check if message already exists
-              const exists = prevMessages.some(m => m.id === payload.new.id);
-              if (exists) return prevMessages;
-              
-              const newMessage = {
-                id: payload.new.id,
-                content: payload.new.content,
-                created_at: payload.new.created_at,
-                sender_type: payload.new.sender_type as MessageType,
-                is_typing: false
-              };
+          setMessages(prevMessages => {
+            // Check if message already exists
+            const exists = prevMessages.some(m => m.id === payload.new.id);
+            if (exists) return prevMessages;
 
-              // Ensure greeting stays at top if it exists
-              const greetingMessage = prevMessages.find(m => m.id === 'greeting');
-              const otherMessages = prevMessages.filter(m => m.id !== 'greeting');
-              
-              return greetingMessage 
-                ? [greetingMessage, ...otherMessages, newMessage]
-                : [...otherMessages, newMessage];
-            });
-          }
+            // Get the greeting message if it exists
+            const greetingMessage = prevMessages.find(m => m.id === 'greeting');
+            
+            // Create the new message
+            const newMessage = {
+              id: payload.new.id,
+              content: payload.new.content,
+              created_at: payload.new.created_at,
+              sender_type: payload.new.sender_type as MessageType,
+              is_typing: false
+            };
+
+            // Get all non-greeting messages
+            const otherMessages = prevMessages.filter(m => m.id !== 'greeting');
+
+            // Combine all messages in the correct order
+            const allMessages = greetingMessage 
+              ? [greetingMessage, ...otherMessages, newMessage]
+              : [...otherMessages, newMessage];
+
+            // Remove any duplicates while preserving order
+            return allMessages.filter((msg, index, self) =>
+              index === self.findIndex((m) => m.id === msg.id)
+            );
+          });
         }
       )
       .subscribe();

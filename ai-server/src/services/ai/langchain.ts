@@ -675,11 +675,11 @@ export class LangchainService {
       // Run competitor research and org data fetch concurrently
       const [competitorResearchRun, { data: orgData }] = await Promise.all([
         this.client.createRun({
-        name: "Competitor Research",
-        run_type: "chain",
-        project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
-        parent_run_id: parentRun?.id,
-        inputs: { title, organizationId }
+          name: "Competitor Research",
+          run_type: "chain",
+          project_name: process.env.LANGSMITH_PROJECT_ARTICLE,
+          parent_run_id: parentRun?.id,
+          inputs: { title, organizationId }
         }),
         this.supabase
           .from('organizations')
@@ -691,7 +691,7 @@ export class LangchainService {
       const brandName = orgData?.name || 'Our';
 
       // Start competitor research early
-      const competitorInsightsPromise = this.learnFromHelpCenters(title, organizationId);
+      const competitorInsights = await this.learnFromHelpCenters(title, organizationId);
 
       // Create article generation run while competitor research is in progress
       const articleGenRun = await this.client.createRun({
@@ -706,9 +706,6 @@ export class LangchainService {
         }
       });
 
-      // Wait for competitor insights
-      const competitorInsights = await competitorInsightsPromise;
-
       if (competitorResearchRun) {
         await competitorResearchRun.end({
           outputs: { competitorInsights }
@@ -717,6 +714,8 @@ export class LangchainService {
       }
 
       let accumulatedContent = '';
+      console.log('Starting article generation...');
+      
       const content = await this.streamOpenAIResponse(
         `You are writing a help center article as ${brandName}'s official customer service representative.
 
@@ -742,11 +741,20 @@ export class LangchainService {
          Write a concise, sophisticated response in our brand voice without quotation marks.`,
         (chunk) => {
           accumulatedContent += chunk;
-          // Could emit progress events here if needed
+          console.log('Received chunk:', chunk); // Debug logging
         }
       );
 
-      const cleanedContent = content.replace(/['"]/g, '');
+      console.log('Generated content:', content); // Debug logging
+
+      // Clean the content and ensure it's not empty
+      const cleanedContent = content?.replace(/['"]/g, '') || '';
+      
+      if (!cleanedContent) {
+        throw new Error('No content was generated');
+      }
+
+      console.log('Cleaned content:', cleanedContent); // Debug logging
 
       if (articleGenRun) {
         await articleGenRun.end({
@@ -1041,15 +1049,26 @@ export class LangchainService {
   private async streamOpenAIResponse(
     prompt: string,
     onProgress: (chunk: string) => void
-  ): Promise<void> {
-    await this.model.invoke(prompt, {
+  ): Promise<string> {
+    let accumulatedContent = '';
+    
+    const response = await this.model.invoke(prompt, {
       callbacks: [{
         handleLLMNewToken(token: string) {
+          accumulatedContent += token;
           onProgress(token);
         },
       }],
       stream: true
     });
+
+    // Wait for the final content and use it if available
+    if (response.content) {
+      return response.content.toString();
+    }
+
+    // Fallback to accumulated content if response.content is not available
+    return accumulatedContent || '';
   }
 
   private async scrapeAndProcessUrl(url: string): Promise<Document[]> {
