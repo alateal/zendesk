@@ -23,10 +23,10 @@ type ConversationStatus = 'New' | 'AI_Chat' | 'Pending_Handoff' | 'Active' | 'Cl
 
 // Define valid status transitions with assignment states
 const STATUS_TRANSITIONS = {
-  New: { next: ['AI_Chat'], assignment: { is_assigned: true, assigned_to: 'ai-dali' } },
+  New: { next: ['AI_Chat', 'Closed'], assignment: { is_assigned: true, assigned_to: 'ai-dali' } },
   AI_Chat: { next: ['Pending_Handoff', 'Closed'], assignment: { is_assigned: true, assigned_to: 'ai-dali' } },
-  Pending_Handoff: { next: ['Active'], assignment: { is_assigned: false, assigned_to: null } },
-  Active: { next: ['Closed'], assignment: null }, // Assignment handled by agent dashboard
+  Pending_Handoff: { next: ['Active', 'Closed'], assignment: { is_assigned: false, assigned_to: null } },
+  Active: { next: ['Closed'], assignment: null },
   Closed: { next: [], assignment: null }
 } as const;
 
